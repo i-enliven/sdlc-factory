@@ -27,7 +27,7 @@ services:
     environment:
       # The connection string format: postgresql://user:password@hostname:port/dbname
       - PHOENIX_SQL_DATABASE_URL=postgresql://postgres:secret@db:5432/factory-dev
-      - PHOENIX_ALLOWED_HOSTS=your-hostname.ts.net,localhost
+      - PHOENIX_ALLOWED_HOSTS=neptune.mara-balance.ts.net,localhost
     restart: always
 
 volumes:

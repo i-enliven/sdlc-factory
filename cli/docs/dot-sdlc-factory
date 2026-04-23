@@ -1,0 +1,42 @@
+{
+  "workspace_root": "~/sdlc-factory/workspace",
+  "agents_root": "~/sdlc-factory/agents",
+  "connection_string": "dbname=factory-dev user=postgres password=secret host=0.0.0.0",
+  "gemini_api_key": "",
+  "vertex_api_key": "",
+  "hf_token": "",
+  "max_retry_limit": 2,
+  "cli_command_timeout": 300,
+  "models": {
+    "planner": {
+      "model": "gemini-3-flash-preview",
+      "temperature": 0.2,
+      "max_iterations": 15
+    },
+    "architect": {
+      "model": "gemini-3.1-pro-preview",
+      "temperature": 0.0,
+      "max_iterations": 20
+    },
+    "tester": {
+      "model": "gemini-3-flash-preview",
+      "temperature": 0.0,
+      "max_iterations": 30
+    },
+    "coder": {
+      "model": "gemini-3.1-pro-preview",
+      "temperature": 0.0,
+      "max_iterations": 60
+    },
+    "deployer": {
+      "model": "gemini-3-flash-preview",
+      "temperature": 0.0,
+      "max_iterations": 60
+    },
+    "monitor": {
+      "model": "gemini-3-flash-preview",
+      "temperature": 0.0,
+      "max_iterations": 15
+    }
+  }
+}

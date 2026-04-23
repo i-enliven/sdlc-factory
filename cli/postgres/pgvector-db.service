@@ -1,0 +1,19 @@
+[Unit]
+Description=SDLC Factory Postgres (pgvector-db) Docker Compose Service
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+Restart=always
+WorkingDirectory=/home/ienliven/Projects/sdlc-factory/cli
+
+# Bring down existing containers to ensure a clean start
+ExecStartPre=/usr/bin/docker compose down
+# Start containers in the foreground so systemd can track the process
+ExecStart=/usr/bin/docker compose up
+# Bring down containers on service stop
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target

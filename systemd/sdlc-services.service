@@ -1,0 +1,14 @@
+[Unit]
+Description=SDLC Factory Docker Compose Services
+
+[Service]
+Type=simple
+Restart=always
+WorkingDirectory=~/sdlc-factory/cli
+
+ExecStartPre=/usr/bin/docker compose down
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=default.target

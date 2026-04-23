@@ -1,0 +1,16 @@
+[Unit]
+Description=SDLC Factory Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=~/sdlc-factory/workspace
+# Execute the unbuffered uv-installed CLI
+ExecStart=/usr/local/bin/sdlc-factory run --interval 300
+Restart=always
+RestartSec=10
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
+

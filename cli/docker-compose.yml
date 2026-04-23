@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: pgvector-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: factory-dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: phoenix-server
+    depends_on:
+      - db
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      # The connection string format: postgresql://user:password@hostname:port/dbname
+      - PHOENIX_SQL_DATABASE_URL=postgresql://postgres:secret@db:5432/factory-dev
+      - PHOENIX_ALLOWED_HOSTS=your-hostname.ts.net,localhost
+    restart: always
+
+volumes:
+  pgdata:

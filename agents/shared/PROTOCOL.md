@@ -32,7 +32,7 @@ Agents do not self-trigger. They are invoked by their native SDLC Factory heartb
 | **3. Test Design** | `tester` | Writes isolated module tests (Child Workdir) | `test_payload.json` | `CODING` |
 | **4. Coding** | `coder` | Implements localized module (Child Workdir) | `code_payload.json` | `QA_REVIEW` |
 | **5. QA Review** | `tester` | Runs localized unit tests (Child Workdir) | `qa_report.json` | `MODULE_RESOLVED` (Gathers if all siblings done) |
-| **6. Integration** | `tester` | Runs E2E suites (e.g., Playwright/Cypress for UI) across assembled app | `integration_report.json` | `HUMAN_QA` |
+| **6. Integration** | `tester` | Runs E2E suites (e.g., Playwright for UI, subprocess for CLI) across assembled app | `integration_report.json` | `HUMAN_QA` |
 | **7. Human QA** | `human` | Human visual/functional verification. Manually runs `advance-state`. | *none* | `DEPLOY` |
 | **8. Deploy** | `deployer` | **Heuristic Packaging**: Analyzes stack and creates `dist/artifact.tar.gz`. | `deploy_payload.json` | `MONITOR` |
 | **9. Monitor** | `monitor` | **Sandbox Validation**: Extracts archive and executes `entry_command`. | `health_status.json` | `RESOLVED` |
@@ -43,7 +43,7 @@ The `deployer` must produce a standalone archive.
 2. **Consolidate**: Build production assets and resolve local dependencies.
 3. **Compress**: Bundle the file tree into `dist/artifact.tar.gz`.
 4. **Contract**: Define the `entry_command` in `dist/metadata.json` assuming extraction to a clean root.
-5. **Frontend Asset Compilation**: If the stack includes a modern frontend (e.g., Vite/React), the `deployer` MUST execute the build step (e.g., `pnpm build`) and package the resulting static `dist/` folder for the Nginx proxy, rather than serving the raw source code.
+5. **Asset Compilation**: If the stack requires compilation (e.g., Vite/React UI or compiled binaries), the `deployer` MUST execute the build step (e.g., `pnpm build`) and package the resulting built artifacts for the execution environment, rather than serving raw unbuilt source code.
 
 ## 5. Tool Execution & Resource Discipline
 * **Context Primacy (MANDATORY):** You are a **Pre-Hydrated** agent. Your wake-up prompt contains a `SYSTEM CONTEXT` block with your specific module boundaries, environment rules, and curated code snippets (if defined). You MUST rely on this as your primary source of truth for the current task.
@@ -58,7 +58,8 @@ The `deployer` must produce a standalone archive.
 * **Idempotency:** Use `mkdir -p` and `rm -f` to eliminate unnecessary "existence check" tool calls.
 * **CLI Persistence (MANDATORY):** All file persistence is strictly manual. You MUST generate files securely via the terminal using your `run_cli_command` tool (e.g., `cat << 'EOF' > file.json...`) before advancing the state. Conversational output does NOT write to the disk.
 * **On-the-Fly Recovery:** If the `sdlc_advance_state` tool throws a `SCHEMA_VALIDATION_FAILED` error, do not panic or regress. Simply fix your JSON payload via the CLI and retry the state advancement tool.
-* **Headless Execution Strictness (MANDATORY):** Agents operating in UI environments must ensure all test runners (Playwright, Cypress, Vitest) run in strict headless CI mode (e.g., `CI=true`, `--reporter=list`). Interactive prompts will fatally hang the shell. Furthermore, do NOT use `--with-deps` during Playwright installation (e.g. `npx playwright install --with-deps chromium`), as it triggers `sudo` and steals TTY input. Use `npx playwright install chromium` exclusively.
+* **Headless Execution Strictness (MANDATORY):** Agents operating in any environment (UI, CLI, API) must ensure all test runners and execution commands run in strict headless CI/non-interactive mode (e.g., `CI=true`, `--reporter=list`). Interactive prompts will fatally hang the shell. Furthermore, do NOT use `--with-deps` during Playwright installation (e.g. `npx playwright install --with-deps chromium`), as it triggers `sudo` and steals TTY input. Use `npx playwright install chromium` exclusively.
+* **Execution Completion (Yielding):** Do not run placeholder CLI commands like `echo "Done"` to signal you have finished a task. When your work is complete and you have invoked `sdlc_advance_state` (or finalized your necessary tool calls), simply yield (i.e., stop executing tools and conclude your response) to allow the native factory heartbeat to process your completion and save token context.
 
 ## 6. Communication & Context Fast-Dieting
 1. **Rationalized Execution:** Agents must produce Action Rationale in natural language to formulate tool calls, but all final deliverables strictly conform to JSON, pseudo-code, or source code.
@@ -67,7 +68,7 @@ The `deployer` must produce a standalone archive.
 
 ## 7. Semantic Mastery & Long Term Memory
 Agents have access to a dynamic RAG memory vector cluster (`pgvector`).
-1. **Explicit Storage**: If an agent resolves a highly complex configuration/regression, they MUST push the exact insight into long-term memory via the CLI: `sdlc-factory store-memory --agent <your-role> --task-context "<issue>" --resolution "<solution>"`.
+1. **Explicit Storage (Stack-Aware)**: Because the factory is stack-agnostic, you MUST explicitly prepend the tech stack to your context (e.g., `[React/Vite] <issue>` or `[Python/CLI] <issue>`) to avoid polluting the global vector space. If an agent resolves a highly complex configuration/regression, they MUST push the exact insight into long-term memory via the CLI: `sdlc-factory store-memory --agent <your-role> --task-context "[<Tech Stack>] <issue>" --resolution "<solution>"`.
 2. **Contextual Retrieval**: These memories are autonomously stitched into your initial payload or whenever you run the `context` command with your `--agent` parameter.
 
 ## 8. Error Handling: The Regression Rule

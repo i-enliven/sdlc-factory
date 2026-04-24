@@ -19,7 +19,7 @@ def test_build_context(mocker, mock_config, mock_db, tmp_path):
     ws.mkdir(parents=True)
     (ws / "docs").mkdir()
     (ws / "handoff").mkdir()
-    (ws / "docs" / "API_CONTRACTS.md").write_text("## > BEGIN_ENVIRONMENT\nenv\n## > END_ENVIRONMENT\n\n## > BEGIN_MODULE: api\ncode\n## > END_MODULE: api")
+    (ws / "docs" / "API_CONTRACTS.md").write_text("## > BEGIN_ENVIRONMENT\nenv\n## > END_ENVIRONMENT\n\n## > BEGIN_MODULE: api\ncode\n## > END_MODULE")
     write_json(ws / "handoff" / "arch_payload.json", {})
     mocker.patch("sdlc_factory.memory.get_embedding", return_value=[0.1])
     ctx = build_context("task-1", "api", "coder")

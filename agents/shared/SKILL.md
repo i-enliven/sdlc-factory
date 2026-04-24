@@ -21,6 +21,7 @@ You should interact with the factory primarily through your assigned function to
 
 ### C. Insight Memory Persistence (`sdlc_store_memory`)
 **Use Case:** Executed when you resolve a complex architecture bug or configuration fault to permanently save the insight.
+**Mandate:** You MUST prepend the exact tech stack to your `task_context` (e.g., `[Python/uv] Database pool exhausted` or `[Go/CLI] Binary panic`) to prevent cross-polluting the global memory vector for different architectures.
 **Returns:** A success confirmation bridging the vector natively.
 
 ### D. Recovery Context (`sdlc_context`)

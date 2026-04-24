@@ -17,10 +17,11 @@
 * **Interface Primacy**: `docs/API_CONTRACTS.md` is the immutable law. You must use `## > BEGIN_MODULE` and `## > END_MODULE` tags.
 * **Regression Silence**: When in PATCH MODE, do not add new features. Only fix the specific contract violation reported.
 * **Module Typology**: Every module defined in `docs/API_CONTRACTS.md` MUST be explicitly tagged as either `Type: LEAF` (handles logic/data) or `Type: ORCHESTRATOR` (handles routing/coordination). 
+* **Global Orchestration Topology**: The responsibility for writing multi-service orchestration files (e.g. `docker-compose.yml`) must be explicitly assigned to the system's entry point (e.g. `ui-gateway` or `api-gateway`) or a dedicated orchestrator module, NEVER to a database or peripheral leaf logic module.
 * **The Routing Mandate**: If a module is an `ORCHESTRATOR`, its contract MUST include a `Routing Contract` section detailing exactly which sibling modules are invoked under which conditions (e.g., "IF args[0] == 'init', invoke CMD_INIT").
 * **Environment Mandate**: You MUST define the stack at the top of `docs/API_CONTRACTS.md`. This block MUST include:
-    - **Entry_Point**: The **External Host Port** URL as defined in `PROD_SPEC.md` (e.g., http://localhost:8000).
-    - **UI_Mount_Selector**: The DOM element where the UI renders (e.g., `#root`).
+    - **Entry_Point**: The **External Host Port** URL (if networked) or Base Execution Command (if CLI).
+    - **Interface_Mount_Selector**: The DOM element where the UI renders (e.g., `#root`), OR standard output structure for CLI validation.
     - **INTEGRATION_TEST_CMD**: A headless-safe command. **MANDATORY FORMAT**: `CI=true <command> --reporter=list`.
 
 ## playbook
@@ -33,7 +34,7 @@
     4. **Modify**: Update `docs/API_CONTRACTS.md`.
         * **Validation Audit**: Cross-reference `PROD_SPEC.md` specifically for host-port mappings (e.g., "map host port 8000 to container port 80"). 
         * **Write Environment Block**: Ensure the `Entry_Point` uses the host port and the `INTEGRATION_TEST_CMD` contains the `CI=true` prefix.
-    5. **Query Prep**: Refine `context_queries` to provide localized RAG snippets.
+    5. **Query Prep**: Refine `context_queries` to provide localized RAG snippets. You MUST prepend the target stack to your queries (e.g., `[Python] PostgreSQL connection pool setup`) to ensure accurate, stack-agnostic retrieval.
 * **Output File**: Generate `handoff/arch_payload.json`.
     ```json
     {
@@ -44,8 +45,7 @@
         {
           "module_name": "Auth",
           "assigned_agent": "coder",
-          "context_queries": ["PostgreSQL connection pool setup", "JWT signing logic"]
-        }
+          "context_queries": ["[Python] PostgreSQL connection pool setup", "[NodeJS] JWT signing logic"]
       ]
     }
     ```

@@ -34,13 +34,13 @@ def build_context(task_id: str, module: str, agent: Optional[str] = None) -> dic
             env_body = env_match.group(1).strip()
             structural_context += f"## > BEGIN_ENVIRONMENT\n{env_body}\n## > END_ENVIRONMENT\n\n"
 
-        match = re.search(rf"## > BEGIN_MODULE: {module}\n(.*?)\n## > END_MODULE: {module}", full_text, re.DOTALL)
+        match = re.search(rf"## > BEGIN_MODULE: {module}\n(.*?)\n## > END_MODULE", full_text, re.DOTALL)
         if match: 
             module_body = match.group(1).strip()
             structural_context += f"## > BEGIN_MODULE: {module}\n{module_body}\n## > END_MODULE: {module}"
 
             if "Type:** ORCHESTRATOR" in module_body:
-                all_modules = re.findall(r"## > BEGIN_MODULE: ([a-zA-Z0-9_-]+)\n(.*?)\n## > END_MODULE: \1", full_text, re.DOTALL)
+                all_modules = re.findall(r"## > BEGIN_MODULE: ([a-zA-Z0-9_-]+)\n(.*?)\n## > END_MODULE", full_text, re.DOTALL)
                 dependencies_context = []
 
                 for mod_name, mod_body in all_modules:

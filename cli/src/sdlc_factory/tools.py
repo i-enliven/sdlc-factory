@@ -16,12 +16,12 @@ def run_cli_command(command: str, cwd: str = ".", timeout: Optional[int] = None)
     try:
         res = subprocess.run(command, cwd=cwd, shell=True, capture_output=True, text=True, check=False, timeout=timeout, stdin=subprocess.DEVNULL)
         output = res.stdout + res.stderr
-        return output[:4000] if output else "Command executed successfully with no output."
+        return output if output else "Command executed successfully with no output."
     except subprocess.TimeoutExpired as e:
         out_stdout = e.stdout.decode('utf-8', errors='ignore') if isinstance(e.stdout, bytes) else (e.stdout or "")
         out_stderr = e.stderr.decode('utf-8', errors='ignore') if isinstance(e.stderr, bytes) else (e.stderr or "")
         out = out_stdout + out_stderr
-        return f"Command execution timed out after {timeout} seconds.\nOutput before timeout:\n{out[:3900]}"
+        return f"Command execution timed out after {timeout} seconds.\nOutput before timeout:\n{out}"
     except Exception as e:
         return f"Error executing command: {e}"
 

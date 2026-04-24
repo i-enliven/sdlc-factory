@@ -38,7 +38,6 @@ def interrupt_handler(signum, frame):
 def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None):
     """Executes the Antigravity subagent directly using the genai SDK."""
     agent_tracer = logging.getLogger(f"sdlc_factory.agent.{agent_name}")
-    global_logger.info(f"[AGENT:{agent_name}] Booting...")
 
     config_data = get_config()
     from sdlc_factory.telemetry import setup_telemetry
@@ -300,8 +299,6 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         continue
                 break
                 
-        global_logger.info(f"[AGENT:{agent_name}] Executed successfully.", extra={"color": typer.colors.CYAN})
-        
         final_text = ""
         if getattr(response, "candidates", None):
             candidate = response.candidates[0]

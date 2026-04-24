@@ -46,8 +46,9 @@ The `deployer` must produce a standalone archive.
 5. **Frontend Asset Compilation**: If the stack includes a modern frontend (e.g., Vite/React), the `deployer` MUST execute the build step (e.g., `pnpm build`) and package the resulting static `dist/` folder for the Nginx proxy, rather than serving the raw source code.
 
 ## 5. Tool Execution & Resource Discipline
-* **Context Primacy:** You must rely primarily on the Fast-Dieted context provided in your initial JSON payload. This payload contains the specific structural boundaries curated for your phase.
-* **Search as a Fallback:** The `search-codebase` tool is an expensive, secondary discovery mechanism. You may ONLY execute it if you encounter an explicitly undefined function, a missing dependency, or a completely undocumented legacy pattern that is blocking your task. Do NOT use it to "browse" the repository.
+* **Context Primacy (MANDATORY):** You are a **Pre-Hydrated** agent. Your wake-up prompt contains a `SYSTEM CONTEXT` block with your specific module boundaries, environment rules, and curated code snippets (if defined). You MUST rely on this as your primary source of truth for the current task.
+* **On-Demand Discovery:** The `sdlc_search_codebase` tool is your primary mechanism for discovering logic, utilities, or patterns in **brownfield projects** that are NOT included in your initial pre-hydrated context. Use it proactively to fill knowledge gaps, discover legacy dependencies, or align with existing project conventions.
+* **Native Tool Preference:** When available, use the native function tools (e.g., `sdlc_advance_state`, `sdlc_context`, `sdlc_search_codebase`) instead of manual shell strings. They are faster, more reliable, and provide better error handling.
 * **Execution Efficiency:** Before invoking any tool, ensure you have formulated a precise, targeted query. Do not execute rapid, sequential tool calls trying to guess a file structure. Read, reason, execute once.
 * **Consolidate Discovery:** Batch reconnaissance (e.g., `ls src/ docs/ tests/` or `tree -L 2`) into single calls. 
 * **High-Context Reading:** Use `grep -Hn ".*" file1 file2` to read multiple files; this provides filenames and line numbers in a single stream, preventing context fragmentation.
@@ -56,7 +57,7 @@ The `deployer` must produce a standalone archive.
 * **Batch Reading:** When inspecting known implementation details, use a single `grep -Hn ".*" file1 file2 file3` call for all relevant files to reduce round-trip overhead.
 * **Idempotency:** Use `mkdir -p` and `rm -f` to eliminate unnecessary "existence check" tool calls.
 * **CLI Persistence (MANDATORY):** All file persistence is strictly manual. You MUST generate files securely via the terminal using your `run_cli_command` tool (e.g., `cat << 'EOF' > file.json...`) before advancing the state. Conversational output does NOT write to the disk.
-* **On-the-Fly Recovery:** If a native `sdlc_advance_state` tool throws a `SCHEMA_VALIDATION_FAILED` error, do not panic or regress. Simply fix your JSON payload via the CLI and retry the state advancement tool.
+* **On-the-Fly Recovery:** If the `sdlc_advance_state` tool throws a `SCHEMA_VALIDATION_FAILED` error, do not panic or regress. Simply fix your JSON payload via the CLI and retry the state advancement tool.
 * **Headless Execution Strictness (MANDATORY):** Agents operating in UI environments must ensure all test runners (Playwright, Cypress, Vitest) run in strict headless CI mode (e.g., `CI=true`, `--reporter=list`). Interactive prompts will fatally hang the shell. Furthermore, do NOT use `--with-deps` during Playwright installation (e.g. `npx playwright install --with-deps chromium`), as it triggers `sudo` and steals TTY input. Use `npx playwright install chromium` exclusively.
 
 ## 6. Communication & Context Fast-Dieting

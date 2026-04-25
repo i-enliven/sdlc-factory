@@ -352,3 +352,4 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
         # --- RESTORE ORIGINAL SIGNAL HANDLER ---
         # Ensures the heartbeat loop returns to normal behavior when the agent sleeps
         signal.signal(signal.SIGINT, original_sigint)
+

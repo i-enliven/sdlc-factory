@@ -136,6 +136,12 @@ def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resum
 
 
 @app.command()
+def chat(session_id: str = typer.Option(..., help="Session UUID to chat with")):
+    """Opens a read-only interactive chat with a previous agent session."""
+    from sdlc_factory.chat import run_chat_session
+    run_chat_session(session_id)
+
+@app.command()
 def run(interval: int = typer.Option(30, help="Seconds to wait between idle heartbeat pulses"), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
     """Runs the SDLC Factory heartbeat continuously as a long-lived daemon."""
     global_logger.info(f"🚀 Starting continuous SDLC Factory heartbeat...", extra={"color": typer.colors.MAGENTA, "bold": True})

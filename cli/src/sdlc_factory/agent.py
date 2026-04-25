@@ -133,16 +133,26 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             except Exception as e:
                 error_str = str(e).lower()
                 error_name = type(e).__name__.lower()
-                if "503" in error_str or "504" in error_str or "429" in error_str or "unavailable" in error_str or "timeout" in error_str or "timeout" in error_name or "deadline_exceeded" in error_str or "cancelled" in error_str:
-                    if attempt < max_retries - 1:
+                
+                # Fail fast for known unrecoverable errors (e.g., 400 Bad Request, malformed payload)
+                if "400" in error_str or "invalid argument" in error_str:
+                    raise e
+                    
+                if attempt < max_retries - 1:
+                    if "503" in error_str or "504" in error_str or "429" in error_str or "unavailable" in error_str or "timeout" in error_str or "timeout" in error_name or "deadline_exceeded" in error_str or "cancelled" in error_str:
                         if HUMAN_PAUSE_REQUESTED:
                             delay = 1
                             global_logger.info("⚠️ API connection interrupted by OS signal. Safely retrying to capture state...", extra={"color": typer.colors.YELLOW})
                         else:
                             delay = base_delay * (2 ** attempt)
-                            global_logger.warning(f"⚠️ API Timeout/Overloaded (Attempt {attempt+1}/{max_retries}). Retrying in {delay}s...")
-                        time.sleep(delay)
-                        continue
+                            global_logger.warning(f"⚠️ API Interruption ({type(e).__name__}): {e}. Retrying in {delay}s (Attempt {attempt+1}/{max_retries})...")
+                    else:
+                        delay = base_delay * (2 ** attempt)
+                        global_logger.warning(f"⚠️ Unexpected API Error: {error_name} - {e}. Retrying in {delay}s (Attempt {attempt+1}/{max_retries})...")
+                    
+                    time.sleep(delay)
+                    continue
+                
                 raise e
 
     def handle_human_pause(tool_results=None):
@@ -348,6 +358,10 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         final_text += part.text
         return final_text.strip() if final_text.strip() else "Agent execution completed successfully via CLI tools."
 
+    except Exception as e:
+        global_logger.error(f"🔴 Fatal API/Execution Error: {e}", extra={"bold": True})
+        abort(f"Agent execution failed due to unhandled exception: {e}")
+        
     finally:
         # --- RESTORE ORIGINAL SIGNAL HANDLER ---
         # Ensures the heartbeat loop returns to normal behavior when the agent sleeps

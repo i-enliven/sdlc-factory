@@ -71,6 +71,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     target_model = agent_config.get("model", "gemini-2.5-flash")
     target_temp = float(agent_config.get("temperature", 0.0))
     agent_max_iterations = int(agent_config.get("max_iterations", 25))
+    system_instruction += f"\n\n[SYSTEM RESOURCE LIMIT]: You are constrained to a maximum of {agent_max_iterations} execution iterations for this session. Plan your commands efficiently. If you are approaching this limit, DO NOT force a success state. You MUST write an escalation report to 'issues/ISSUE-FATAL.md' explaining the roadblock, and then advance the state to BLOCKED."
     vertex_api_key = config_data.get("vertex_api_key")
 
     if vertex_api_key:

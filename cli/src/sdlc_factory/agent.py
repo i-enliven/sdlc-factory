@@ -164,7 +164,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             user_msg = input("🤖 (Human Override) > ").strip()
             
             if user_msg:
-                if tool_results is not None:
+                if tool_results:
                     last_part = tool_results[-1]
                     orig_result = last_part.function_response.response.get("result", "")
                     override_text = f"### ⚠️ URGENT HUMAN OVERRIDE INSTRUCTION ⚠️\nThe human operator has intercepted this execution and provided the following direct instruction you MUST follow:\n\n{user_msg}\n\n---\nOriginal Tool Output:\n{orig_result}"
@@ -251,6 +251,21 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 tool_results = []
                 for i, call in enumerate(response.function_calls):
                     
+                    if HUMAN_PAUSE_REQUESTED:
+                        override = handle_human_pause(tool_results)
+                        if override:
+                            remaining_calls = response.function_calls[i:]
+                            for rem_idx, rem_call in enumerate(remaining_calls):
+                                dummy_text = "ABORTED BY HUMAN OVERRIDE IN PREVIOUS STEP"
+                                if isinstance(override, str) and rem_idx == 0:
+                                    dummy_text = f"### ⚠️ URGENT HUMAN OVERRIDE INSTRUCTION ⚠️\nThe human operator has intercepted this execution and provided the following direct instruction you MUST follow:\n\n{override}\n\n(Note: This tool and subsequent parallel tools were aborted)"
+                                
+                                tool_results.append(types.Part.from_function_response(
+                                    name=rem_call.name,
+                                    response={"result": dummy_text}
+                                ))
+                            break
+                    
                     # --- 2. THE 3X WARNING INTERVENTION ---
                     if consecutive_call_count == 3:
                         output = (
@@ -333,17 +348,6 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         name=call.name,
                         response={"result": output}
                     ))
-                    
-                    if HUMAN_PAUSE_REQUESTED:
-                        override_applied = handle_human_pause(tool_results)
-                        if override_applied:
-                            remaining_calls = response.function_calls[i+1:]
-                            for rem_call in remaining_calls:
-                                tool_results.append(types.Part.from_function_response(
-                                    name=rem_call.name,
-                                    response={"result": "ABORTED BY HUMAN OVERRIDE IN PREVIOUS STEP"}
-                                ))
-                            break
                 # ---------------------------------------
 
                 response = send_with_retry(tool_results)

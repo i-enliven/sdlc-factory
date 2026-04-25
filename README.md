@@ -113,7 +113,27 @@ Execute a specific agent context manually without triggering the strict state-ad
 sdlc-factory task --agent coder
 ```
 
-### 4. Triggering a Pipeline Regression
+### 4. Human-in-the-Loop Override
+If an agent is executing a command that you want to intercept (e.g., it is trapped in a loop or writing incorrect code), you can press `Ctrl+C` during its run. The factory will safely pause execution after the current tool finishes, allowing you to inject a direct conversational override. 
+- Press `Ctrl+C` once to trigger the human override prompt.
+- Enter your instructions, and they will be injected directly into the agent's context window.
+- If you change your mind, press `Ctrl+D` at the override prompt to seamlessly resume execution without interference.
+
+### 5. Resuming a Paused Session
+Agent histories are serialized and saved automatically. If you hard-abort a run or wish to continue a specific task from a previous state, you can resume it using its unique session ID (found in your `agents/sessions/` directory or trace logs):
+```bash
+sdlc-factory heartbeat --resume <UUID>
+```
+*(This also works with `run` and `task` commands).*
+
+### 6. Diagnostic Chat Mode
+To interrogate an agent's reasoning without altering its codebase or corrupting its active session state, use the read-only chat mode. This disables the agent's file modification tools while retaining its entire memory and context for that session.
+```bash
+sdlc-factory chat --session-id <UUID>
+```
+*(You can explicitly tell the agent to save insights during chat, which will route through the isolated `sdlc_store_memory` vector tool).*
+
+### 7. Triggering a Pipeline Regression
 If an agent detects a critical failure from an upstream worker (e.g., Code fails to compile, or tests fail), they generate a `regression_report.json` and invoke a state swap rollback to immediately assign the fracture to the previous worker.
 
 **Example `handoff/regression_report.json`:**
@@ -136,7 +156,7 @@ sdlc-factory advance-state --task-id "TICKET-123" --to CODING --regression
 ```
 
 ---
-### 5. Testing Code Quality
+### 8. Testing Code Quality
 Verify the framework's robustness by running the test suite with coverage reporting.
 ```bash
 cd cli
@@ -176,7 +196,8 @@ Responsibilities are distributed across six highly specialized roles:
 
 Under the hood, the Python-based execution engine (`cli/src/sdlc_factory/`) drives the deterministic pipelines without relying on heavy third-party agent wrappers:
 * **`cli.py` & `heartbeat.py`**: The core daemon orchestrators. They expose the user endpoints, load pending queues from the state ledger, enforce task blockages, and route tasks to agents.
-* **`agent.py`**: The dynamic LLM integration layer. Seamlessly dynamically streams the target agent's specific markdown topology (`SOUL`, `AGENTS`, `SKILL`, `PROTOCOL`), constructs contexts, and communicates safely with the LLM. 
+* **`agent.py`**: The dynamic LLM integration layer. Handles parallel tool execution, contextual human-in-the-loop overrides (`Ctrl+C`), and serializes agent history to `.session` files for deterministic resumption.
+* **`chat.py`**: A read-only diagnostic REPL. Safely loads historic `.session` payloads into the LLM while disabling file modification tooling to prevent state corruption during operator interrogation.
 * **`state.py`**: A strict JSON Schema validation engine executing rigorous handoffs between phases (e.g. Deployer cannot act until the Tester submits a properly signed JSON schema).
 * **`telemetry.py`**: Automatically wraps generative execution via OpenTelemetry, streaming logs natively to Arize Phoenix.
 * **`tools.py`**: Houses the strict native capability scripts (like `advance_state` and `search_codebase`) that are systematically injected into the LLM during runtime.

@@ -1,13 +1,15 @@
 import json
 import typer
+import uuid
 from datetime import datetime
+from typing import Optional
 
 from sdlc_factory.utils import SCHEMAS, global_logger
 from sdlc_factory.state import get_pending_task, get_blocked_tasks
 from sdlc_factory.memory import build_context
 from sdlc_factory.agent import execute_agent
 
-def run_heartbeat_cycle() -> bool:
+def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
     """Executes one pass of the pipeline. Returns True if a task was processed."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     global_logger.debug(f"⏱️  Pulse Executed at {timestamp}")
@@ -57,8 +59,10 @@ def run_heartbeat_cycle() -> bool:
                 f"CRITICAL: If successful, your handoff JSON must strictly validate against this schema:\n```json\n{schema_str}\n```\n"
                 "If you learn an architecture-critical lesson, permanently save it for your future self using the native `sdlc_store_memory` tool.\n"
             )           
-            global_logger.info(f"🚀 Dispatching {agent} | Phase: {task['phase']} (Module: {task['assigned_module']})", extra={"color": typer.colors.GREEN})
-            result = execute_agent(agent, prompt)
+            session_id = resume_session_id or f"{agent}-{str(uuid.uuid4())[:6]}"
+            is_resume = bool(resume_session_id)
+            global_logger.info(f"🚀 Dispatching {agent} | Phase: {task['phase']} (Module: {task['assigned_module']}) | Session: {session_id}", extra={"color": typer.colors.GREEN})
+            result = execute_agent(agent, prompt, session_id=session_id, is_resume=is_resume)
             typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.GREEN)
             return True # Exit cycle to enforce strict cooldown
 

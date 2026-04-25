@@ -110,37 +110,39 @@ def store_memory(agent: str = typer.Option(...), task_context: str = typer.Optio
         abort(f"RAG Persistence Failure: {e}")
 
 @app.command()
-def heartbeat():
+def heartbeat(resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
     """Executes a single pulse of the SDLC Factory autonomous heartbeat."""
-    executed = run_heartbeat_cycle()
+    executed = run_heartbeat_cycle(resume_session_id=resume)
     if not executed:
         global_logger.info("💤 No tasks found. Pipeline is idle.")
 @app.command()
-def task(agent: str = typer.Option(...), prompt: str = typer.Option(None)):
+def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
     """Runs a specific agent in an ad-hoc loop for a given prompt, skipping the heartbeat playbook."""
-    if not prompt:
+    if not prompt and not resume:
         typer.secho("🤖 Enter your multi-line prompt. Press Ctrl+D (EOF) when finished:", fg=typer.colors.CYAN, bold=True)
         prompt = sys.stdin.read().strip()
         
-    if not prompt:
+    if not prompt and not resume:
         abort("Prompt cannot be empty.")
         
     from sdlc_factory.agent import execute_agent
     
     # Append a generic workdir verification so it uses current directory properly
-    prompt = f"*Workdir*: {Path.cwd().resolve()}\n\n" + prompt
+    if prompt:
+        prompt = f"*Workdir*: {Path.cwd().resolve()}\n\n" + prompt
     
-    result = execute_agent(agent, prompt, exclude_files=["AGENTS.md", "PROTOCOL.md"])
+    result = execute_agent(agent, prompt, exclude_files=["AGENTS.md", "PROTOCOL.md"], session_id=resume, is_resume=bool(resume))
     typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.GREEN)
 
 
 @app.command()
-def run(interval: int = typer.Option(30, help="Seconds to wait between idle heartbeat pulses")):
+def run(interval: int = typer.Option(30, help="Seconds to wait between idle heartbeat pulses"), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
     """Runs the SDLC Factory heartbeat continuously as a long-lived daemon."""
     global_logger.info(f"🚀 Starting continuous SDLC Factory heartbeat...", extra={"color": typer.colors.MAGENTA, "bold": True})
     try:
         while True:
-            executed = run_heartbeat_cycle()
+            executed = run_heartbeat_cycle(resume_session_id=resume)
+            resume = None # Only resume the first cycle
             if executed:
                 time.sleep(2) 
             else:

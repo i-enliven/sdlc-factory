@@ -35,7 +35,7 @@ def interrupt_handler(signum, frame):
         HUMAN_PAUSE_REQUESTED = True
         print("\n\n⚠️ [PAUSE REQUESTED] Finishing current tool execution before opening human prompt... (Press Ctrl+C again to hard abort)\n")
 
-def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None):
+def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False):
     """Executes the Antigravity subagent directly using the genai SDK."""
     agent_tracer = logging.getLogger(f"sdlc_factory.agent.{agent_name}")
 
@@ -93,14 +93,43 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
         ]
     )
     
-    chat = client.chats.create(model=target_model, config=config)
+    session_dir = Path(agents_root) / "sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / f"{session_id}.session"
+
+    if is_resume and not session_file.exists():
+        abort(f"Cannot resume: Session file not found at {session_file}")
+
+    history = None
+    resumed = False
+    if session_file.exists():
+        try:
+            raw_data = json.loads(session_file.read_text(encoding="utf-8"))
+            history = [types.Content.model_validate(c) for c in raw_data]
+            resumed = True
+            global_logger.info(f"🔄 Resuming session from {session_file.name}", extra={"color": typer.colors.CYAN})
+        except Exception as e:
+            global_logger.warning(f"Failed to parse session file {session_file}: {e}")
+
+    chat = client.chats.create(model=target_model, config=config, history=history)
+
+    def save_session():
+        try:
+            hist = chat.get_history()
+            if hist:
+                dumped = [c.model_dump(mode="json") for c in hist]
+                session_file.write_text(json.dumps(dumped, indent=2), encoding="utf-8")
+        except Exception as e:
+            global_logger.warning(f"Failed to serialize session history: {e}")
     
     def send_with_retry(payload, max_retries=7, base_delay=5):
         time.sleep(0.5)
         for attempt in range(max_retries):
             try:
                 with using_session(session_id):
-                    return chat.send_message(payload)
+                    res = chat.send_message(payload)
+                    save_session()
+                    return res
             except Exception as e:
                 error_str = str(e).lower()
                 error_name = type(e).__name__.lower()
@@ -137,6 +166,9 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     return user_msg
         except KeyboardInterrupt:
             abort("\n[ABORT] Run cancelled by user during human pause.")
+        except EOFError:
+            global_logger.info("\n⏩ [CONTINUE] Resuming execution without override...", extra={"color": typer.colors.CYAN})
+            return None
         finally:
             HUMAN_PAUSE_REQUESTED = False
             signal.signal(signal.SIGINT, interrupt_handler)
@@ -152,7 +184,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     # ----------------------------------
 
     try:
-        response = send_with_retry(prompt)
+        if resumed:
+            global_logger.info("⏸️  [SESSION RESUMED] Triggering Human Override prompt for instructions...", extra={"color": typer.colors.CYAN})
+            user_msg = handle_human_pause()
+            if user_msg:
+                response = send_with_retry(user_msg)
+            else:
+                response = send_with_retry("SYSTEM: Session resumed. Please continue.")
+        else:
+            response = send_with_retry(prompt)
         
         import re
         workdir_match = re.search(r"\*Workdir\*:\s*([^\n]+)", prompt)

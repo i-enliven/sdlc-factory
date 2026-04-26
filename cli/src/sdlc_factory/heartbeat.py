@@ -3,6 +3,7 @@ import typer
 import uuid
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 
 from sdlc_factory.utils import SCHEMAS, global_logger
 from sdlc_factory.state import get_pending_task, get_blocked_tasks
@@ -46,6 +47,34 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
             except Exception as e:
                 context_str = f"Error loading context: {str(e)}. Proceed with caution."
 
+            phase = task.get("phase")
+            workspace = Path(task["workspace"])
+            phase_context = ""
+            phase_files = {
+                "PLANNING": ["handoff/RAW_REQUIREMENTS.md", "RAW_REQUIREMENTS.md", "docs/RFC.md", "docs/PROD_SPEC.md", "handoff/regression_report.json"],
+                "ARCHITECTURE": ["handoff/spec_payload.json", "docs/PROD_SPEC.md", "handoff/regression_report.json"],
+                "TEST_DESIGN": ["handoff/arch_payload.json", "handoff/regression_report.json"],
+                "CODING": ["handoff/test_payload.json", "handoff/regression_report.json"],
+                "INTEGRATION_ASSEMBLY": ["handoff/code_payload.json", "docs/API_CONTRACTS.md", "handoff/regression_report.json"],
+                "QA_REVIEW": ["handoff/code_payload.json", "handoff/regression_report.json"],
+                "INTEGRATION_TESTING": ["handoff/qa_report.json", "docs/PROD_SPEC.md", "docs/API_CONTRACTS.md", "handoff/regression_report.json"],
+                "DEPLOY": ["handoff/integration_report.json", "handoff/regression_report.json"],
+                "MONITOR": ["handoff/deploy_payload.json"]
+            }
+
+            if phase in phase_files:
+                for file_path_str in phase_files[phase]:
+                    file_path = workspace / file_path_str
+                    if file_path.exists():
+                        try:
+                            content = file_path.read_text(encoding="utf-8")
+                            phase_context += f"### {file_path.name}\n```\n{content}\n```\n\n"
+                        except Exception as e:
+                            phase_context += f"### {file_path.name}\nError reading file: {e}\n\n"
+
+            if phase_context:
+                phase_context = f"## PHASE CONTEXT ({phase})\n{phase_context}\n"
+
             prompt = (
                 "# 🟢 HEARTBEAT_WAKEUP\n"
                 "You have been routed ONE isolated task. \n"
@@ -53,12 +82,13 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
                 f"*Module*: {task['assigned_module']}\n"
                 f"*Workdir*: {task['workspace']}\n"
                 f"*Phase*: {task['phase']}\n\n"
+                f"{phase_context}"
                 "## SYSTEM CONTEXT\n"
                 f"```json\n{context_str}\n```\n\n"
                 "The SDLC Protocol and your Playbook are your core instructions.\n"
                 f"CRITICAL: If successful, your handoff JSON must strictly validate against this schema:\n```json\n{schema_str}\n```\n"
                 "If you learn an architecture-critical lesson, permanently save it for your future self using the native `sdlc_store_memory` tool.\n"
-            )           
+            )
             session_id = resume_session_id or f"{agent}-{str(uuid.uuid4())[:6]}"
             is_resume = bool(resume_session_id)
             global_logger.info(f"🚀 Dispatching {agent} | Phase: {task['phase']} (Module: {task['assigned_module']}) | Session: {session_id}", extra={"color": typer.colors.GREEN})

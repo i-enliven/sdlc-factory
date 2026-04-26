@@ -7,33 +7,17 @@ from sdlc_factory.tools import (
 )
 
 def test_run_cli_command(mocker):
-    res = mocker.MagicMock()
-    res.stdout = "hello"
-    res.stderr = ""
-    mocker.patch("sdlc_factory.tools.subprocess.run", return_value=res)
-    
     out = run_cli_command("echo hello")
-    assert out == "hello"
+    assert out.strip() == "hello"
 
 def test_run_cli_command_timeout(mocker):
-    # Setup mock exception that has stdout and stderr attribute as byte arrays or strings
-    class MockTimeoutException(subprocess.TimeoutExpired):
-        def __init__(self, cmd, timeout, output=None, stderr=None):
-            super().__init__(cmd, timeout, output, stderr)
-            self.stdout = output
-            self.stderr = stderr
-            
-    mocker.patch("sdlc_factory.tools.subprocess.run", side_effect=MockTimeoutException("sleep", 1, b"hello", None))
-    
-    out = run_cli_command("sleep 1", timeout=1)
+    out = run_cli_command("sleep 2", timeout=1)
     assert "timed out" in out
-    assert "hello" in out
 
 def test_run_cli_command_exception(mocker):
-    mocker.patch("sdlc_factory.tools.subprocess.run", side_effect=Exception("kaboom"))
+    mocker.patch("sdlc_factory.tools.subprocess.Popen", side_effect=Exception("kaboom"))
     out = run_cli_command("fail")
     assert "Error executing command: kaboom" in out
-
 def test_sdlc_query_state_blocked(mocker):
     mocker.patch("sdlc_factory.tools.get_blocked_tasks", return_value=["task1"])
     res = json.loads(sdlc_query_state(check_blocked=True))

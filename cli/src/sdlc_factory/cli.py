@@ -115,6 +115,7 @@ def heartbeat(resume: Optional[str] = typer.Option(None, "--resume", help="Sessi
     executed = run_heartbeat_cycle(resume_session_id=resume)
     if not executed:
         global_logger.info("💤 No tasks found. Pipeline is idle.")
+
 @app.command()
 def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
     """Runs a specific agent in an ad-hoc loop for a given prompt, skipping the heartbeat playbook."""

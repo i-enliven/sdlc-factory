@@ -4,7 +4,7 @@ from pathlib import Path
 from sdlc_factory.chat import run_chat_session
 
 def test_run_chat_session_missing_file(mocker, tmp_path):
-    mocker.patch("sdlc_factory.chat.get_config", return_value={"agents_root": str(tmp_path)})
+    mocker.patch("sdlc_factory.chat.get_config", return_value={"sessions_root": str(tmp_path)})
     mock_abort = mocker.patch("sdlc_factory.chat.abort", side_effect=Exception("Aborted"))
     
     with pytest.raises(Exception, match="Aborted"):
@@ -14,18 +14,13 @@ def test_run_chat_session_missing_file(mocker, tmp_path):
     assert "Session file not found" in mock_abort.call_args[0][0]
 
 def test_run_chat_session_basic(mocker, tmp_path):
-    agent_dir = tmp_path / "testagent"
-    agent_dir.mkdir()
-    (agent_dir / "SOUL.md").write_text("soul data")
-    
-    session_dir = tmp_path / "sessions"
-    session_dir.mkdir()
+    session_dir = tmp_path
     session_file = session_dir / "testagent-123.session"
     
     mocker.patch("sdlc_factory.chat.types.Content.model_validate", side_effect=lambda x: x, create=True)
     session_file.write_text(json.dumps([{"role": "user", "parts": [{"text": "hi"}]}]), encoding="utf-8")
     
-    mocker.patch("sdlc_factory.chat.get_config", return_value={"agents_root": str(tmp_path), "models": {"testagent": {"model": "gemini-2.5-flash"}}})
+    mocker.patch("sdlc_factory.chat.get_config", return_value={"sessions_root": str(tmp_path), "models": {"testagent": {"model": "gemini-2.5-flash"}}})
     
     mock_client_class = mocker.patch("google.genai.Client", create=True)
     mock_client = mock_client_class.return_value
@@ -48,18 +43,13 @@ def test_run_chat_session_basic(mocker, tmp_path):
     mock_chat.send_message.assert_called_once_with("hello")
 
 def test_run_chat_session_with_tool(mocker, tmp_path):
-    agent_dir = tmp_path / "testagent"
-    agent_dir.mkdir()
-    (agent_dir / "SOUL.md").write_text("soul data")
-    
-    session_dir = tmp_path / "sessions"
-    session_dir.mkdir()
+    session_dir = tmp_path
     session_file = session_dir / "testagent-123.session"
     
     mocker.patch("sdlc_factory.chat.types.Content.model_validate", side_effect=lambda x: x, create=True)
     session_file.write_text("[]", encoding="utf-8")
     
-    mocker.patch("sdlc_factory.chat.get_config", return_value={"agents_root": str(tmp_path)})
+    mocker.patch("sdlc_factory.chat.get_config", return_value={"sessions_root": str(tmp_path)})
     
     mock_client_class = mocker.patch("google.genai.Client", create=True)
     mock_client = mock_client_class.return_value

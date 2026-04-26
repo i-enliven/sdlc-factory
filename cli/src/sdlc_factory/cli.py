@@ -35,7 +35,8 @@ def config(workspace_root: str = typer.Option(..., help="Absolute path to the SD
 @app.command()
 def init(
     task_id: str = typer.Option(...),
-    requirements_file: Optional[Path] = typer.Option(None, "-f", "--file", help="Path to initial requirements file")
+    requirements_file: Optional[Path] = typer.Option(None, "-f", "--file", help="Path to initial requirements file"),
+    workflow: str = typer.Option("sdlc", "--workflow", help="The name of the workflow plugin to run")
 ):
     ws = get_workspace(task_id)
     if ws.exists():
@@ -53,8 +54,8 @@ def init(
         global_logger.info(f"Copied requirements from {requirements_file} to {dest}", extra={"color": typer.colors.CYAN})
         
     from sdlc_factory.utils import write_json
-    write_json(ws / ".state" / "current.json", {"phase": "PLANNING", "task_id": task_id})
-    global_logger.info(f"[SUCCESS] Initialized workspace for {task_id}", extra={"color": typer.colors.GREEN})
+    write_json(ws / ".state" / "current.json", {"workflow": workflow, "phase": "PLANNING", "task_id": task_id})
+    global_logger.info(f"[SUCCESS] Initialized workspace for {task_id} (Workflow: {workflow})", extra={"color": typer.colors.GREEN})
 
 @app.command()
 def query_state(agent: str = typer.Option(None), check_blocked: bool = typer.Option(False, "--check-blocked")):
@@ -117,7 +118,7 @@ def heartbeat(resume: Optional[str] = typer.Option(None, "--resume", help="Sessi
         global_logger.info("💤 No tasks found. Pipeline is idle.")
 
 @app.command()
-def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
+def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume"), workflow: str = typer.Option("sdlc", "--workflow", help="Workflow to use")):
     """Runs a specific agent in an ad-hoc loop for a given prompt, skipping the heartbeat playbook."""
     if not prompt and not resume:
         typer.secho("🤖 Enter your multi-line prompt. Press Ctrl+D (EOF) when finished:", fg=typer.colors.CYAN, bold=True)
@@ -132,7 +133,7 @@ def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resum
     if prompt:
         prompt = f"*Workdir*: {Path.cwd().resolve()}\n\n" + prompt
     
-    result = execute_agent(agent, prompt, exclude_files=["AGENTS.md", "PROTOCOL.md"], session_id=resume, is_resume=bool(resume))
+    result = execute_agent(agent, prompt, exclude_files=["AGENTS.md", "PROTOCOL.md"], session_id=resume, is_resume=bool(resume), workflow_name=workflow)
     typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.GREEN)
 
 

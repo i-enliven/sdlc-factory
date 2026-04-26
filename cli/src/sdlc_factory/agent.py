@@ -236,7 +236,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
         response={"result": output}
     ), session_cwd
 
-def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False):
+def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
     """Executes the Antigravity subagent directly using the genai SDK."""
     agent_tracer = logging.getLogger(f"sdlc_factory.agent.{agent_name}")
 
@@ -245,9 +245,13 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     setup_telemetry(config_data)
     
     session_id = session_id or f"{agent_name}-{str(uuid.uuid4())[:6]}"
-    agents_root = config_data.get("agents_root")
-    if not agents_root:
-        abort("ERROR: 'agents_root' is not defined in the configuration (~/.sdlc-factory.json).")
+    
+    from sdlc_factory.workflows import get_workflow
+    workflow = get_workflow(workflow_name)
+    agents_root = workflow.agents_dir
+    
+    if not agents_root.exists():
+        abort(f"ERROR: Agents directory not found at {agents_root}")
 
     exclude_files = exclude_files or []
     system_instruction = _build_system_instruction(agent_name, Path(agents_root), exclude_files)
@@ -265,7 +269,10 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     client = _setup_client(config_data, system_instruction, target_temp)
     config = _get_genai_config(system_instruction, target_temp)
     
-    session_dir = Path(agents_root) / "sessions"
+    sessions_root = config_data.get("sessions_root")
+    if not sessions_root:
+        abort("ERROR: 'sessions_root' is not defined in the configuration.")
+    session_dir = Path(sessions_root)
     session_dir.mkdir(parents=True, exist_ok=True)
     session_file = session_dir / f"{session_id}.session"
 

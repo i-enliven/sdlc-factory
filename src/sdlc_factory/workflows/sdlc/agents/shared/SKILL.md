@@ -24,17 +24,11 @@ You should interact with the factory primarily through your assigned function to
 **Mandate:** You MUST prepend the exact tech stack to your `task_context` (e.g., `[Python/uv] Database pool exhausted` or `[Go/CLI] Binary panic`) to prevent cross-polluting the global memory vector for different architectures.
 **Returns:** A success confirmation bridging the vector natively.
 
-### D. Recovery Context (`sdlc_context`)
-**Use Case:** Use ONLY if your initial prompt context is missing critical module definitions or if you need to re-verify boundaries during a complex regression.
-
 ## 3. Secondary CLI Commands
 If function tools are unavailable, you may use the standard CLI via `run_cli_command`.
 
 ### A. Manual Search (`sdlc-factory search-codebase`)
 **Syntax:** `sdlc-factory search-codebase --query "<natural_language_search_string>" --limit <int>`
-
-### B. Manual Context (`sdlc-factory context`)
-**Syntax:** `sdlc-factory context --task-id <TASK_ID> --module <MODULE_ID> --agent <YOUR_ROLE>`
 
 ## 4. Strict Execution Rules
 1. **JSON Only:** All files you write to `handoff/` must be strictly typed JSON matching the system schemas. No conversational markdown.

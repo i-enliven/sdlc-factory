@@ -1,6 +1,6 @@
 {
   "workspace_root": "~/sdlc-factory/workspace",
-  "agents_root": "~/sdlc-factory/agents",
+  "sessions_root": "~/sdlc-factory/sessions",
   "connection_string": "dbname=factory-dev user=postgres password=secret host=0.0.0.0",
   "gemini_api_key": "",
   "vertex_api_key": "",

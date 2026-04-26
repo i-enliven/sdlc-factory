@@ -7,7 +7,10 @@ def test_execute_agent_basic(mocker, tmp_path):
     agent_dir.mkdir()
     (agent_dir / "SOUL.md").write_text("soul data")
     
-    mocker.patch("sdlc_factory.agent.get_config", return_value={"agents_root": str(tmp_path), "models": {"testagent": {"model": "gemini-2.5-flash"}}})
+    mocker.patch("sdlc_factory.agent.get_config", return_value={"sessions_root": str(tmp_path), "models": {"testagent": {"model": "gemini-3.1-pro-preview-customtools"}}})
+    mock_workflow = mocker.MagicMock()
+    mock_workflow.agents_dir = tmp_path
+    mocker.patch("sdlc_factory.workflows.get_workflow", return_value=mock_workflow)
     mocker.patch("sdlc_factory.telemetry.setup_telemetry")
     
     mock_client_class = mocker.patch("google.genai.Client", create=True)
@@ -35,7 +38,10 @@ def test_execute_agent_function_call(mocker, tmp_path):
     agent_dir.mkdir()
     (agent_dir / "SOUL.md").write_text("soul data")
     
-    mocker.patch("sdlc_factory.agent.get_config", return_value={"agents_root": str(tmp_path)})
+    mocker.patch("sdlc_factory.agent.get_config", return_value={"sessions_root": str(tmp_path)})
+    mock_workflow = mocker.MagicMock()
+    mock_workflow.agents_dir = tmp_path
+    mocker.patch("sdlc_factory.workflows.get_workflow", return_value=mock_workflow)
     mocker.patch("sdlc_factory.telemetry.setup_telemetry")
     mocker.patch("sdlc_factory.agent.run_cli_command", return_value="ls output")
     

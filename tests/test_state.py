@@ -3,9 +3,9 @@ from pathlib import Path
 from sdlc_factory.utils import write_json, read_json
 from sdlc_factory.state import (
     validate_handoff, handle_regression, auto_hydrate_payload,
-    get_blocked_tasks, get_pending_task, do_advance_state,
-    scatter_architecture, gather_modules
+    get_blocked_tasks, get_pending_task, do_advance_state
 )
+from sdlc_factory.workflows.sdlc.plugin import SdlcWorkflow
 
 def test_auto_hydrate_payload(mocker, mock_config, tmp_path):
     ws = tmp_path / "test_workspace" / "t1"
@@ -13,9 +13,9 @@ def test_auto_hydrate_payload(mocker, mock_config, tmp_path):
     (ws / "handoff").mkdir()
     
     mock_schema = {"file": "arch_payload.json"}
-    mocker.patch.dict("sdlc_factory.state.SCHEMAS", {"ARCHITECTURE": mock_schema}, clear=True)
+    mocker.patch("sdlc_factory.workflows.sdlc.plugin.SdlcWorkflow.schemas", new_callable=mocker.PropertyMock, return_value={"ARCHITECTURE": mock_schema})
     
-    auto_hydrate_payload(ws, "ARCHITECTURE", "t1", "sys")
+    auto_hydrate_payload(ws, "ARCHITECTURE", "t1", "sys", "sdlc")
     
     data = read_json(ws / "handoff" / "arch_payload.json")
     assert data["status"] == "success"
@@ -28,9 +28,9 @@ def test_validate_handoff_passes(mocker, tmp_path):
     (ws / "handoff" / "requirements.json").write_text('{"phase_completed": "PLANNING", "requirements": []}')
     
     mock_schema = {"file": "requirements.json", "schema": {"type": "object"}}
-    mocker.patch.dict("sdlc_factory.state.SCHEMAS", {"PLANNING": mock_schema}, clear=True)
+    mocker.patch("sdlc_factory.workflows.sdlc.plugin.SdlcWorkflow.schemas", new_callable=mocker.PropertyMock, return_value={"PLANNING": mock_schema})
     
-    validate_handoff(ws, "PLANNING")
+    validate_handoff(ws, "PLANNING", "sdlc")
 
 def test_validate_handoff_fails(mocker, tmp_path):
     ws = tmp_path / "ws"
@@ -39,10 +39,10 @@ def test_validate_handoff_fails(mocker, tmp_path):
     (ws / "handoff" / "requirements.json").write_text('{"bad": "data"}')
     
     mock_schema = {"file": "requirements.json", "schema": {"type": "object", "required": ["req"]}}
-    mocker.patch.dict("sdlc_factory.state.SCHEMAS", {"PLANNING": mock_schema}, clear=True)
+    mocker.patch("sdlc_factory.workflows.sdlc.plugin.SdlcWorkflow.schemas", new_callable=mocker.PropertyMock, return_value={"PLANNING": mock_schema})
     
     with pytest.raises(ValueError):
-        validate_handoff(ws, "PLANNING")
+        validate_handoff(ws, "PLANNING", "sdlc")
 
 def test_handle_regression_budget_exceeded(tmp_path):
     ws = tmp_path / "ws"
@@ -69,7 +69,8 @@ def test_scatter_architecture(mocker, tmp_path, mock_config):
     (ws / "docs" / "API_CONTRACTS.md").write_text("contracts")
     write_json(ws / "handoff" / "arch_payload.json", {"vertical_slices": [{"module_name": "api"}]})
     
-    scatter_architecture(ws, "t1")
+    wf = SdlcWorkflow()
+    wf._scatter_architecture(ws, "t1")
     
     child_ws = tmp_path / "test_workspace" / "t1-MOD-api"
     assert child_ws.exists()
@@ -90,7 +91,8 @@ def test_gather_modules(tmp_path, mock_config):
     (child / ".state").mkdir()
     write_json(child / ".state" / "current.json", {"phase": "MODULE_RESOLVED"})
     
-    gather_modules("t1-MOD-api")
+    wf = SdlcWorkflow()
+    wf._gather_modules("t1-MOD-api")
     
     int_ws = tmp_path / "test_workspace" / "t1-INTEGRATION"
     assert int_ws.exists()
@@ -102,12 +104,12 @@ def test_do_advance_state_consolidate(mocker, tmp_path, mock_config):
     (int_ws / ".state").mkdir()
     (int_ws / "src").mkdir()
     (int_ws / "src" / "app.py").write_text("code")
-    write_json(int_ws / ".state" / "current.json", {"phase": "INTEGRATION_ASSEMBLY"})
+    write_json(int_ws / ".state" / "current.json", {"workflow": "sdlc", "phase": "INTEGRATION_ASSEMBLY"})
 
     parent = tmp_path / "test_workspace" / "t1"
     parent.mkdir(parents=True)
     (parent / ".state").mkdir()
-    write_json(parent / ".state" / "current.json", {"phase": "AWAITING_MODULES"})
+    write_json(parent / ".state" / "current.json", {"workflow": "sdlc", "phase": "AWAITING_MODULES"})
 
     mocker.patch("sdlc_factory.state.auto_hydrate_payload")
     mocker.patch("sdlc_factory.state.validate_handoff")
@@ -132,7 +134,7 @@ def test_get_pending_task(mocker, mock_config, tmp_path):
     ws = tmp_path / "test_workspace" / "t1"
     ws.mkdir(parents=True)
     (ws / ".state").mkdir()
-    write_json(ws / ".state" / "current.json", {"phase": "PLANNING"})
+    write_json(ws / ".state" / "current.json", {"workflow": "sdlc", "phase": "PLANNING"})
     
     res = get_pending_task("planner")
     assert res["task_id"] == "t1"
@@ -141,7 +143,7 @@ def test_do_advance_state(mocker, mock_config, tmp_path):
     ws = tmp_path / "test_workspace" / "t1"
     ws.mkdir(parents=True)
     (ws / ".state").mkdir()
-    write_json(ws / ".state" / "current.json", {"phase": "PLANNING"})
+    write_json(ws / ".state" / "current.json", {"workflow": "sdlc", "phase": "PLANNING"})
     
     mocker.patch("sdlc_factory.state.auto_hydrate_payload")
     mocker.patch("sdlc_factory.state.validate_handoff")
@@ -154,7 +156,7 @@ def test_do_advance_state_regression(mocker, mock_config, tmp_path):
     ws = tmp_path / "test_workspace" / "t1"
     ws.mkdir(parents=True)
     (ws / ".state").mkdir()
-    write_json(ws / ".state" / "current.json", {"phase": "CODING", "retry_count": 0})
+    write_json(ws / ".state" / "current.json", {"workflow": "sdlc", "phase": "CODING", "retry_count": 0})
     mocker.patch("sdlc_factory.state.get_config", return_value={"max_retry_limit": 2})
     
     do_advance_state("t1", "ARCHITECTURE", regression=True)

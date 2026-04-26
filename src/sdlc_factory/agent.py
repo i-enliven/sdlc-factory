@@ -14,12 +14,10 @@ import re
 import os
 from openinference.instrumentation import using_session
 
-from sdlc_factory.utils import get_config, global_logger, abort
+from sdlc_factory.utils import get_config, abort, global_logger, get_workspace, format_size
 
 from sdlc_factory.tools import (
     run_cli_command,
-    sdlc_query_state,
-    sdlc_context,
     sdlc_advance_state,
     sdlc_search_codebase,
     sdlc_store_memory
@@ -70,8 +68,6 @@ def _get_genai_config(system_instruction: str, target_temp: float) -> types.Gene
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         tools=[
             run_cli_command,
-            sdlc_query_state,
-            sdlc_context,
             sdlc_advance_state,
             sdlc_search_codebase,
             sdlc_store_memory
@@ -124,7 +120,7 @@ def _handle_human_pause(tool_results=None) -> Any:
     signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         msg = "Agent execution paused." if tool_results is not None else "Agent execution paused before exiting."
-        typer.secho(f"\n⏸️  [SYSTEM PAUSE] {msg}", fg=typer.colors.CYAN, bold=True)
+        typer.secho(f"\n⏸️  [SYSTEM PAUSE] {msg}", fg=typer.colors.YELLOW, bold=True)
         user_msg = input("🤖 (Human Override) > ").strip()
         
         if user_msg:
@@ -151,7 +147,7 @@ def _handle_human_pause(tool_results=None) -> Any:
 def _get_tree_prompt(session_cwd: Path) -> str:
     prompt_addition = ""
     try:
-        tree_lines = []
+        tree_entries = []
         for root, dirs, files in os.walk(session_cwd):
             if '.git' in dirs:
                 dirs.remove('.git')
@@ -159,20 +155,41 @@ def _get_tree_prompt(session_cwd: Path) -> str:
             if depth > 1:
                 dirs.clear()
                 continue
+            
             rel_root = Path(root).relative_to(session_cwd)
             root_str = "." if str(rel_root) == "." else f"./{rel_root}"
-            if root_str not in tree_lines:
-                tree_lines.append(root_str)
+            
+            try:
+                dir_mtime = datetime.fromtimestamp(Path(root).stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                dir_mtime = "Unknown"
+            
+            dir_size = "<DIR>"
+            dir_root_str = f"{root_str}/" if root_str != "." else "./"
+            dir_entry = (dir_root_str, dir_mtime, dir_size)
+            if not any(entry[0] == dir_root_str for entry in tree_entries):
+                tree_entries.append(dir_entry)
+                
             for f in files:
-                tree_lines.append(f"{root_str}/{f}")
+                f_path = Path(root) / f
+                try:
+                    stat_info = f_path.stat()
+                    f_mtime = datetime.fromtimestamp(stat_info.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                    f_size = format_size(stat_info.st_size)
+                except Exception:
+                    f_mtime = "Unknown"
+                    f_size = "Unknown"
+                tree_entries.append((f"{root_str}/{f}", f_mtime, f_size))
         
-        ls_output = "\n".join(sorted(tree_lines))
+        tree_entries.sort(key=lambda x: x[0])
+        header = f"{'PATH':<50} {'SIZE':<12} LAST MODIFIED\n" + "-" * 85
+        ls_output = header + "\n" + "\n".join([f"{path:<50} {size:<12} [{mtime}]" for path, mtime, size in tree_entries])
         prompt_addition += f"\n\n## WORKSPACE DIRECTORY TREE\n```text\n{ls_output.strip()}\n```\n"
     except Exception as e:
         prompt_addition += f"\n\n## WORKSPACE DIRECTORY TREE\nError fetching tree: {e}\n\n"
     return prompt_addition
 
-def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_count: int, max_context_iterations: int, agent_tracer: logging.Logger) -> Tuple[types.Part, Path]:
+def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> Tuple[types.Part, Path]:
     if call.name == "run_cli_command":
         cmd = call.args.get("command", "").strip()
         req_cwd = call.args.get("cwd", None)
@@ -183,7 +200,9 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
             exec_cwd = str(session_cwd)
         
         agent_tracer.info(f"\n[EXECUTING COMMAND in {exec_cwd}]:\n{cmd}\n")
-        global_logger.info(f"🔧 [{iteration_count:03}/{max_context_iterations:03}] Running CLI: {cmd}", extra={"color": typer.colors.MAGENTA, "truncate_console": 150})
+        prefix = typer.style(f"{log_prefix} Running CLI:", fg=typer.colors.WHITE)
+        cmd_colored = typer.style(cmd, fg=typer.colors.GREEN)
+        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
         if cmd.startswith("cd "):
             target = re.split(r'&&|;', cmd)[0][3:].strip().strip("'\"")
             new_cwd = Path(exec_cwd).joinpath(target).resolve()
@@ -203,17 +222,11 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
         cmd_name = call.name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
         cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call.args.items()])
         
-        icons = {"sdlc_query_state": "🔄", "sdlc_context": "🧠", "sdlc_advance_state": "🚀", "sdlc_search_codebase": "🔍", "sdlc_store_memory": "💾"}
-        colors = {"sdlc_query_state": typer.colors.CYAN, "sdlc_context": typer.colors.MAGENTA, "sdlc_advance_state": typer.colors.GREEN, "sdlc_search_codebase": typer.colors.YELLOW, "sdlc_store_memory": typer.colors.BLUE}
-        
+        prefix = typer.style(f"{log_prefix} Native CLI:", fg=typer.colors.WHITE)
+        cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
         agent_tracer.info(f"\n[EXECUTING NATIVE COMMAND]:\n{cmd_str}\n")
-        global_logger.info(f"{icons.get(call.name, '⚙️')} [{iteration_count:03}/{max_context_iterations:03}] Native CLI: {cmd_str}", extra={"color": colors.get(call.name, typer.colors.WHITE), "truncate_console": 150})
-        
-        if call.name == "sdlc_query_state":
-            output = sdlc_query_state(**call.args)
-        elif call.name == "sdlc_context":
-            output = sdlc_context(**call.args)
-        elif call.name == "sdlc_advance_state":
+        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
+        if call.name == "sdlc_advance_state":
             output = sdlc_advance_state(**call.args)
         elif call.name == "sdlc_search_codebase":
             output = sdlc_search_codebase(**call.args)
@@ -224,8 +237,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
             f"SYSTEM ERROR: Tool '{call.name}' is not available in this context. "
             "Do not attempt to call this tool again. "
             "You must strictly use one of the explicitly provided native tools: "
-            "['run_cli_command', 'sdlc_query_state', 'sdlc_context', "
-            "'sdlc_advance_state', 'sdlc_search_codebase', 'sdlc_store_memory']."
+            "['run_cli_command', 'sdlc_advance_state', 'sdlc_search_codebase', 'sdlc_store_memory']."
         )
         global_logger.warning(f"❌ Hallucination Detected: Unknown tool '{call.name}'")
     
@@ -236,8 +248,8 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
         response={"result": output}
     ), session_cwd
 
-def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False):
-    """Executes the Antigravity subagent directly using the genai SDK."""
+def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
+    """Executes the subagent directly using the genai SDK."""
     agent_tracer = logging.getLogger(f"sdlc_factory.agent.{agent_name}")
 
     config_data = get_config()
@@ -245,9 +257,13 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     setup_telemetry(config_data)
     
     session_id = session_id or f"{agent_name}-{str(uuid.uuid4())[:6]}"
-    agents_root = config_data.get("agents_root")
-    if not agents_root:
-        abort("ERROR: 'agents_root' is not defined in the configuration (~/.sdlc-factory.json).")
+    
+    from sdlc_factory.workflows import get_workflow
+    workflow = get_workflow(workflow_name)
+    agents_root = workflow.agents_dir
+    
+    if not agents_root.exists():
+        abort(f"ERROR: Agents directory not found at {agents_root}")
 
     exclude_files = exclude_files or []
     system_instruction = _build_system_instruction(agent_name, Path(agents_root), exclude_files)
@@ -256,16 +272,17 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     
     models_config = config_data.get("models", {})
     agent_config = models_config.get(agent_name, {})
-    target_model = agent_config.get("model", "gemini-2.5-flash")
+    target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
     target_temp = float(agent_config.get("temperature", 0.0))
     agent_max_iterations = int(agent_config.get("max_iterations", 25))
-    
-    system_instruction += f"\n\n[SYSTEM RESOURCE LIMIT]: You are constrained to a maximum of {agent_max_iterations} execution iterations for this session. Plan your commands efficiently. If you are approaching this limit, DO NOT force a success state. You MUST write an escalation report to 'issues/ISSUE-FATAL.md' explaining the roadblock, and then advance the state to BLOCKED."
 
     client = _setup_client(config_data, system_instruction, target_temp)
     config = _get_genai_config(system_instruction, target_temp)
     
-    session_dir = Path(agents_root) / "sessions"
+    sessions_root = config_data.get("sessions_root")
+    if not sessions_root:
+        abort("ERROR: 'sessions_root' is not defined in the configuration.")
+    session_dir = Path(sessions_root)
     session_dir.mkdir(parents=True, exist_ok=True)
     session_file = session_dir / f"{session_id}.session"
 
@@ -284,8 +301,6 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             global_logger.warning(f"Failed to parse session file {session_file}: {e}")
 
     chat = client.chats.create(model=target_model, config=config, history=history)
-
-    agent_tracer.info(f"=== INITIAL PROMPT ===\n{prompt}\n")
     
     global HUMAN_PAUSE_REQUESTED
     HUMAN_PAUSE_REQUESTED = False
@@ -299,6 +314,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
         if not resumed:
             prompt += _get_tree_prompt(session_cwd)
 
+        agent_tracer.info(f"=== INITIAL PROMPT ===\n{prompt}\n")
         if resumed:
             global_logger.info("⏸️  [SESSION RESUMED] Triggering Human Override prompt for instructions...", extra={"color": typer.colors.CYAN})
             user_msg = _handle_human_pause()
@@ -331,6 +347,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 agent_tracer.info(f"\n[AGENT THOUGHTS]\n{agent_text}\n")
             
             if response.function_calls:
+                try:
+                    hist_size = len(json.dumps([c.model_dump(mode="json") for c in chat.get_history()]).encode("utf-8")) if chat.get_history() else 0
+                except Exception as e:
+                    global_logger.warning(f"Failed to calculate history size for telemetry: {e}")
+                    hist_size = 0
+                context_bytes = len(system_instruction.encode("utf-8")) + hist_size
+                context_size_str = format_size(context_bytes)
+                log_prefix = f"[{iteration_count:03}/{agent_max_iterations:03} - {context_size_str}]"
+                
                 current_call_signature = json.dumps(
                     [{"name": c.name, "args": dict(c.args or {})} for c in response.function_calls],
                     sort_keys=True
@@ -381,7 +406,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         continue
 
                     part, session_cwd = _process_tool_call(
-                        call, session_cwd, cli_timeout, iteration_count, agent_max_iterations, agent_tracer
+                        call, session_cwd, cli_timeout, log_prefix, agent_tracer
                     )
                     tool_results.append(part)
 

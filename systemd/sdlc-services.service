@@ -4,7 +4,7 @@ Description=SDLC Factory Docker Compose Services
 [Service]
 Type=simple
 Restart=always
-WorkingDirectory=/home/ienliven/Projects/sdlc-factory/cli
+WorkingDirectory=~/sdlc-factory/
 
 ExecStartPre=/usr/bin/docker compose down
 ExecStart=/usr/bin/docker compose up

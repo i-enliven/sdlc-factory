@@ -10,11 +10,12 @@ from sdlc_factory.tools import sdlc_store_memory
 def run_chat_session(session_id: str):
     """Runs a read-only interactive chat with a previous session."""
     config_data = get_config()
-    agents_root = config_data.get("agents_root")
-    if not agents_root:
-        abort("ERROR: 'agents_root' is not defined.")
+    
+    sessions_root = config_data.get("sessions_root")
+    if not sessions_root:
+        abort("ERROR: 'sessions_root' is not defined.")
         
-    session_dir = Path(agents_root) / "sessions"
+    session_dir = Path(sessions_root)
     session_file = session_dir / f"{session_id}.session"
     
     if not session_file.exists():
@@ -30,22 +31,11 @@ def run_chat_session(session_id: str):
     parts = session_id.split("-")
     agent_name = parts[0]
     
-    agent_dir = Path(agents_root) / agent_name
-    if not agent_dir.exists():
-        abort(f"Agent directory missing for {agent_name}")
-        
-    system_instruction = ""
-    for md_file in sorted(agent_dir.glob("*.md")):
-        if md_file.name in ["AGENTS.md", "PROTOCOL.md"]:
-            continue
-        md_content = md_file.read_text(encoding='utf-8')
-        system_instruction += f"\n# {md_file.name}\n````markdown\n{md_content}\n````\n"
-        
-    system_instruction += "\n\n### CHAT MODE OVERRIDE ###\nYou are in a read-only CHAT MODE with the human operator. Your tools have been disabled, EXCEPT for `sdlc_store_memory`. You may use it to save insights. Answer the user's questions based on your history.\n"
+    system_instruction = "### CHAT MODE OVERRIDE ###\nYou are in a read-only CHAT MODE with the human operator. Your tools have been disabled, EXCEPT for `sdlc_store_memory`. You may use it to save insights. Answer the user's questions based on your history.\n"
 
     models_config = config_data.get("models", {})
     agent_config = models_config.get(agent_name, {})
-    target_model = agent_config.get("model", "gemini-2.5-flash")
+    target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
     target_temp = float(agent_config.get("temperature", 0.0))
     vertex_api_key = config_data.get("vertex_api_key")
 
@@ -80,7 +70,7 @@ def run_chat_session(session_id: str):
                 tool_results = []
                 for call in response.function_calls:
                     if call.name == "sdlc_store_memory":
-                        global_logger.info(f"💾 Native CLI Called: sdlc_store_memory", extra={"color": typer.colors.BLUE})
+                        global_logger.info(f"💾 Native CLI Called: sdlc_store_memory", extra={"color": typer.colors.GREEN})
                         try:
                             output = sdlc_store_memory(**call.args)
                             global_logger.info(f"[OUTPUT]:\n{output}\n")
@@ -102,7 +92,7 @@ def run_chat_session(session_id: str):
                     if getattr(part, "text", None):
                         agent_text += part.text
                         
-            typer.secho(f"\n🤖 {agent_name}:\n{agent_text.strip()}\n", fg=typer.colors.GREEN)
+            typer.secho(f"\n🤖 {agent_name}:\n{agent_text.strip()}\n", fg=typer.colors.MAGENTA)
             
         except EOFError:
             typer.secho("\n👋 Exiting chat mode.", fg=typer.colors.MAGENTA)

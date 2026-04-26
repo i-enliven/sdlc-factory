@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ienliven/Projects/sdlc-factory/workspace
+WorkingDirectory=~/sdlc-factory/workspace
 # Execute the unbuffered uv-installed CLI
 ExecStart=/usr/local/bin/sdlc-factory run --interval 300
 Restart=always

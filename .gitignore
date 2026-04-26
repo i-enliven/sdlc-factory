@@ -1,4 +1,7 @@
 workspace
 artifacts
 prds
-agents/sessions
+src/sdlc_factory.egg-info
+dist/
+build/
+__pycache__

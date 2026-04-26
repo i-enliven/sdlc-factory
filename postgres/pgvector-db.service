@@ -6,7 +6,7 @@ After=docker.service
 [Service]
 Type=simple
 Restart=always
-WorkingDirectory=/home/ienliven/Projects/sdlc-factory/cli
+WorkingDirectory=~/sdlc-factory
 
 # Bring down existing containers to ensure a clean start
 ExecStartPre=/usr/bin/docker compose down

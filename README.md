@@ -11,10 +11,9 @@ By utilizing the **OpenClaw agentic pattern**—a modern framework where agent b
 Ensure you have [uv](https://github.com/astral-sh/uv) installed for rapid Python package management.
 
 ### 1. Installation
-Navigate to the `cli/` directory to sync dependencies and bind the `sdlc-factory` CLI:
+Sync dependencies and bind the `sdlc-factory` CLI:
 
 ```bash
-cd cli
 uv sync
 
 # Optional: Bind the CLI globally to your system path
@@ -35,7 +34,7 @@ docker compose up -d
 To connect the CLI with the framework components and external LLM models, create a configuration file at `~/.sdlc-factory.json`. This file acts as the master manifest for database bounds, pathing, and GenAI observability.
 
 > [!NOTE]
-> The internal Markdown protocols (`SOUL.md` and `AGENTS.md`) and state machine structures have been heavily tuned specifically for the **Gemini** family of models (e.g., `gemini-3.1-pro-preview` and `gemini-3-flash-preview`). While you can technically swap the backend model via the configuration layer, reasoning and protocol adherence are optimized exclusively for Google's GenAI endpoints.
+> The internal Markdown protocols (`SOUL.md` and `AGENTS.md`) and state machine structures have been heavily tuned specifically for the **Gemini** family of models (e.g., `gemini-3.1-pro-preview` and `gemini-3.1-pro-preview-customtools`). While you can technically swap the backend model via the configuration layer, reasoning and protocol adherence are optimized exclusively for Google's GenAI endpoints.
 
 ### Native `~/.sdlc-factory.json` Example
 ```json
@@ -60,22 +59,22 @@ To connect the CLI with the framework components and external LLM models, create
       "max_iterations": 60
     },
     "tester": {
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro-preview-customtools",
       "temperature": 0.0,
       "max_iterations": 90
     },
     "coder": {
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro-preview-customtools",
       "temperature": 0.0,
       "max_iterations": 120
     },
     "deployer": {
-      "model": "gemini-3-flash-preview",
+      "model": "gemini-3.1-pro-preview-customtools",
       "temperature": 0.0,
       "max_iterations": 60
     },
     "monitor": {
-      "model": "gemini-3-flash-preview",
+      "model": "gemini-3.1-pro-preview-customtools",
       "temperature": 0.0,
       "max_iterations": 60
     }
@@ -159,10 +158,35 @@ sdlc-factory advance-state --task-id "TICKET-123" --to CODING --regression
 ### 8. Testing Code Quality
 Verify the framework's robustness by running the test suite with coverage reporting.
 ```bash
-cd cli
 uv run pytest tests/ --cov=src/sdlc_factory --cov-report=term-missing
 ```
 
+
+## 🔌 Custom Workflows (Plugin Interface)
+
+SDLC Factory provides a highly extensible `WorkflowPlugin` architecture located in `src/sdlc_factory/workflows/`. This allows you to define custom agent loops, phase schemas, and state transitions without modifying the core orchestrator.
+
+### Creating a New Workflow
+1. Subclass `WorkflowPlugin` from `sdlc_factory.workflows.base`.
+2. Implement the required properties (`name`, `agents_dir`, `schemas`, `agents_list`) and methods (`get_pending_task`, `get_phase_context`, `on_transition`, `on_regression`).
+3. Register your plugin in `__init__.py` using the registry pattern:
+```python
+from sdlc_factory.workflows import register_workflow
+register_workflow(MyCustomWorkflow())
+```
+
+---
+
+## 🌐 Model Context Protocol (MCP) Server
+
+The Factory natively exposes an MCP Server (`mcp_server.py`) to allow seamless integration into external AI editors and environments. The following tools are available to MCP clients:
+- `query_state`: Retrieve pending tasks and check for blocked agents.
+- `context`: Retrieve deep structural and semantic context for a specific task.
+- `advance_state`: Force a phase transition or trigger a regression natively.
+- `search_codebase`: Vector search against your project using pgvector.
+- `store_memory`: Store explicit, vectorized insights securely in Postgres.
+
+---
 
 ## 🧠 The OpenClaw Protocol ("Soul" vs. "Execution")
 
@@ -194,7 +218,7 @@ Responsibilities are distributed across six highly specialized roles:
 
 ## ⚙️ Technical Engine (Python CLI)
 
-Under the hood, the Python-based execution engine (`cli/src/sdlc_factory/`) drives the deterministic pipelines without relying on heavy third-party agent wrappers:
+Under the hood, the Python-based execution engine (`src/sdlc_factory/`) drives the deterministic pipelines without relying on heavy third-party agent wrappers:
 * **`cli.py` & `heartbeat.py`**: The core daemon orchestrators. They expose the user endpoints, load pending queues from the state ledger, enforce task blockages, and route tasks to agents.
 * **`agent.py`**: The dynamic LLM integration layer. Handles parallel tool execution, contextual human-in-the-loop overrides (`Ctrl+C`), and serializes agent history to `.session` files for deterministic resumption.
 * **`chat.py`**: A read-only diagnostic REPL. Safely loads historic `.session` payloads into the LLM while disabling file modification tooling to prevent state corruption during operator interrogation.
@@ -202,3 +226,5 @@ Under the hood, the Python-based execution engine (`cli/src/sdlc_factory/`) driv
 * **`telemetry.py`**: Automatically wraps generative execution via OpenTelemetry, streaming logs natively to Arize Phoenix.
 * **`tools.py`**: Houses the strict native capability scripts (like `advance_state` and `search_codebase`) that are systematically injected into the LLM during runtime.
 * **`memory.py` & `db.py`**: Natively provisions **persistent semantic vector memory** using Postgres `pgvector`—allowing agents to embed historical bug reports and retrieve them via cosine-similarity metrics without hallucinating.
+* **`mcp_server.py`**: A `FastMCP` implementation that exposes native Factory context, state management, and memory tools to external AI clients.
+* **`src/sdlc_factory/workflows/`**: The plugin-based architecture for defining scalable custom autonomous loops and schema validations.

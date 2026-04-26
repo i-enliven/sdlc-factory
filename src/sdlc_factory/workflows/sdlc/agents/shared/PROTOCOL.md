@@ -56,7 +56,7 @@ The `deployer` must produce a standalone archive.
 * **Atomic Operations:** Chain creation and verification (e.g., `mkdir -p src/ && ls src/`) to confirm persistence without a second tool turn.
 * **Batch Reading:** When inspecting known implementation details, use a single `grep -Hn ".*" file1 file2 file3` call for all relevant files to reduce round-trip overhead.
 * **Idempotency:** Use `mkdir -p` and `rm -f` to eliminate unnecessary "existence check" tool calls.
-* **CLI Persistence (MANDATORY):** All file persistence is strictly manual. You MUST generate files securely via the terminal using your `run_cli_command` tool (e.g., `cat << 'EOF' > file.json...`) before advancing the state. Conversational output does NOT write to the disk.
+* **CLI Persistence (MANDATORY):** All file persistence is strictly manual. You MUST generate files securely via the terminal using your `run_cli_command` tool (e.g., `cat << 'EOF' > file.json.`) before advancing the state. Conversational output does NOT write to the disk.
 * **On-the-Fly Recovery:** If the `sdlc_advance_state` tool throws a `SCHEMA_VALIDATION_FAILED` error, do not panic or regress. Simply fix your JSON payload via the CLI and retry the state advancement tool.
 * **Headless Execution Strictness (MANDATORY):** Agents operating in any environment (UI, CLI, API) must ensure all test runners and execution commands run in strict headless CI/non-interactive mode (e.g., `CI=true`, `--reporter=list`). Interactive prompts will fatally hang the shell. Furthermore, do NOT use `--with-deps` during Playwright installation (e.g. `npx playwright install --with-deps chromium`), as it triggers `sudo` and steals TTY input. Use `npx playwright install chromium` exclusively.
 * **Execution Completion (Yielding):** Do not run placeholder CLI commands like `echo "Done"` to signal you have finished a task. When your work is complete and you have invoked `sdlc_advance_state` (or finalized your necessary tool calls), simply yield (i.e., stop executing tools and conclude your response) to allow the native factory heartbeat to process your completion and save token context.
@@ -78,7 +78,7 @@ Agents have access to a dynamic RAG memory vector cluster (`pgvector`).
 2. **Indictment**: Identify the responsible upstream phase (e.g., Monitor fails -> Indict `DEPLOY` or `CODING`).
 3. **Regression Handback**: 
     - Explicitly write a diagnostic `handoff/regression_report.json` via the CLI with the stack trace.
-    - Execute `sdlc-factory advance-state --task-id <ID> --to <PHASE> --regression`.
+    - Call the `sdlc_advance_state` native tool with args `{"task_id": "<ID>", "to": "<PHASE>", "regression": true}`.
     - **Bubble-Up Logic:** If a child module regresses to a global phase (`PLANNING` or `ARCHITECTURE`), the CLI will automatically escalate the regression to the parent workspace and place all child modules into a `PAUSED_REGRESSION` state, freezing their execution until the parent resolves the global architecture.
 4. **Escalation**: If a task regresses to the same phase twice, write to `issues/ISSUE-FATAL.md` and set state to `BLOCKED`.
 

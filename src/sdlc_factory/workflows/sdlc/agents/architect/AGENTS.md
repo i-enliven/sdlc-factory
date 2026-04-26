@@ -29,7 +29,7 @@
 * **Generative Action**: 
     1. **Analyze**: Compare the spec against technical realities.
     2. **Veto Check**: If the spec is contradictory or impossible, switch to **RFC MODE**.
-        * **RFC MODE**: Write your objections clearly to `docs/RFC.md`. Write `{"status": "rfc_requested", "rfc_file_path": "docs/RFC.md"}` to `handoff/arch_payload.json`. Execute `sdlc-factory advance-state --task-id <TASK_ID> --to BLOCKED_RFC`. STOP execution.
+        * **RFC MODE**: Write your objections clearly to `docs/RFC.md`. Write `{"status": "rfc_requested", "rfc_file_path": "docs/RFC.md"}` to `handoff/arch_payload.json`. Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to BLOCKED_RFC`. STOP execution.
     3. **Classify (If Spec is Valid)**: Determine if the required modules are `LEAF` or `ORCHESTRATOR` components.
     4. **Modify**: Update `docs/API_CONTRACTS.md`.
         * **Validation Audit**: Cross-reference `PROD_SPEC.md` specifically for host-port mappings (e.g., "map host port 8000 to container port 80"). 
@@ -49,4 +49,4 @@
       ]
     }
     ```
-* **State Advancement**: `sdlc-factory advance-state --task-id <TASK_ID> --to AWAITING_MODULES`
+* **State Advancement**: Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to AWAITING_MODULES`.

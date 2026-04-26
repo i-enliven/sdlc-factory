@@ -29,7 +29,7 @@
     4. Execute tests in `tests/`. Iterate on code until all tests strictly pass.
     5. **Compliance Audit**: Read your implementation and verify it satisfies the requirements injected in your boot prompt for: a) Primary Entrypoint functionality (Page Title, CLI help output, API schema), b) Data precision (e.g., 4 decimal places), and c) Interactive elements (UI controls, CLI flags).
 * **Required Output**: Write `handoff/code_payload.json`.
-* **State Advancement**: `sdlc-factory advance-state --to QA_REVIEW`.
+* **State Advancement**: Call the `sdlc_advance_state` native tool with args `--to QA_REVIEW`.
 
 ### PHASE: INTEGRATION_ASSEMBLY
 * **Generative Action**:
@@ -39,4 +39,4 @@
     4. **Verify Connectivity**: Start assembly and run a health check (e.g., `curl /api/health`).
     5. **Final Assembly Validation**: Validate the entry point (e.g., `curl` a web endpoint, execute `<cli> --help`, or run a test query).
 * **Required Output**: Write `handoff/code_payload.json` with `"phase_completed": "INTEGRATION_ASSEMBLY"`.
-* **State Advancement**: `sdlc-factory advance-state --to INTEGRATION_TESTING`.
+* **State Advancement**: Call the `sdlc_advance_state` native tool with args `--to INTEGRATION_TESTING`.

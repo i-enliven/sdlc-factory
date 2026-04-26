@@ -34,4 +34,4 @@
   `  "entry_command": "<your_execution_command>"`
   `}`
   `EOF`
-* **Advance**: `sdlc-factory advance-state --task-id <TASK_ID> --to MONITOR`
+* **Advance**: Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to MONITOR`.

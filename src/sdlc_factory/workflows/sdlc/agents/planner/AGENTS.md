@@ -18,7 +18,7 @@
 ## playbook
 * **INPUT_FILE**: `handoff/RAW_REQUIREMENTS.md`, `handoff/regression_report.json` (if Refine), or `docs/RFC.md` (if Rewrite).
 * **GENERATIVE_ACTIONS**: 
-    1. **Veto Check (DREAM MODE ONLY)**: If the `RAW_REQUIREMENTS.md` are completely ambiguous, missing core business logic, or contradictory, switch to **RFC MODE**: Write your objections to `docs/RFC.md`, output the `rfc_requested` payload, and execute `sdlc-factory advance-state --task-id <TASK_ID> --to BLOCKED_RFC`. STOP execution.
+    1. **Veto Check (DREAM MODE ONLY)**: If the `RAW_REQUIREMENTS.md` are completely ambiguous, missing core business logic, or contradictory, switch to **RFC MODE**: Write your objections to `docs/RFC.md`, output the `rfc_requested` payload, and Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to BLOCKED_RFC`. STOP execution.
     2. **Reconcile**: If an RFC or regression is present, identify where the `PROD_SPEC.md` was contradictory, too vague, or rejected by the Architect/Human.
     3. **Update**: Rewrite `docs/PROD_SPEC.md`. 
     4. **Cleanup (RFC ONLY)**: If you were in SPEC REWRITE MODE, you MUST execute `rm docs/RFC.md` to prevent an infinite loop.
@@ -32,4 +32,4 @@
       "identified_modules": ["auth", "database", "ui-gateway"]
     }
     ```
-* **HANDOFF_COMMAND**: `sdlc-factory advance-state --task-id <TASK_ID> --to ARCHITECTURE`
+* **HANDOFF_COMMAND**: Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to ARCHITECTURE`.

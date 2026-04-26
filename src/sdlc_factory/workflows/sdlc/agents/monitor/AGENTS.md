@@ -27,6 +27,6 @@
   }
   ```
 * **Advance**:
-  - **Success**: `sdlc-factory advance-state --task-id <TASK_ID> --to RESOLVED`.
-  - **Failure (Logic)**: Create `handoff/regression_report.json` and execute `sdlc-factory advance-state --task-id <TASK_ID> --to CODING --regression`.
-  - **Failure (Build)**: Create `handoff/regression_report.json` and execute `sdlc-factory advance-state --task-id <TASK_ID> --to DEPLOY --regression`.
+  - **Success**: Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to RESOLVED`.
+  - **Failure (Logic)**: Create `handoff/regression_report.json` and Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to CODING --regression`.
+  - **Failure (Build)**: Create `handoff/regression_report.json` and Call the `sdlc_advance_state` native tool with args `--task-id <TASK_ID> --to DEPLOY --regression`.

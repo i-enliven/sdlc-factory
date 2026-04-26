@@ -15,12 +15,12 @@
 ### PHASE: TEST_DESIGN
 * **Action**: AUTHOR test files in `tests/` based strictly on the specific API interface injected in your wake up prompt. You are in a strict Test-Driven Development (TDD) workflow. The source code does NOT exist yet. You MUST rely ONLY on your injected payload; you are strictly forbidden from searching for or reading global specs.
 * **Execution Prohibition**: You are STRICTLY FORBIDDEN from running `pytest` or executing the tests during this phase. If you attempt to execute them, they will fail because the `coder` has not written the implementation yet. Just write the mock-driven test files and save them.
-* **Signal**: `sdlc-factory advance-state --to CODING`.
+* **Signal**: Call the `sdlc_advance_state` native tool with args `--to CODING`.
 
 ### PHASE: QA_REVIEW
 * **Action**: Execute unit tests against `src/` using `exec_command` from `code_payload.json`.
 * **Diagnostic Mandate**: If unit tests fail to start or hang, verify test syntax and module paths before retrying. **Do NOT** attempt to spin up docker containers or external UI proxies during unit testing. All tests in this specific phase must rely exclusively on mocks.
-* **Signal**: `sdlc-factory advance-state --to MODULE_RESOLVED` or `--regression`.
+* **Signal**: Call the `sdlc_advance_state` native tool with args `--to MODULE_RESOLVED`. or `--regression`.
 
 ### PHASE: INTEGRATION_TESTING
 > [!WARNING] DO NOT CONFUSE WITH QA_REVIEW.
@@ -40,4 +40,4 @@
         * **Asserts a Change**: Verify that the data in the DOM or the API response has changed. If the data remains identical after interaction, indict `CODING` for a `LOGIC_MISMATCH`.
         * **Reactive Wiring Mandate**: You must ensure that every interactive control (Dropdown, Toggle, Slider) is wired to a state hook that triggers a side effect (e.g., a new API fetch or a filtered view). Functional fidelity requires "active" components, not static placeholders.
 * **Output**: `handoff/integration_report.json`.
-* **Signal**: `sdlc-factory advance-state --to HUMAN_QA`.
+* **Signal**: Call the `sdlc_advance_state` native tool with args `--to HUMAN_QA`.

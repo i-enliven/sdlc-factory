@@ -207,7 +207,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
         colors = {"sdlc_query_state": typer.colors.CYAN, "sdlc_context": typer.colors.MAGENTA, "sdlc_advance_state": typer.colors.GREEN, "sdlc_search_codebase": typer.colors.YELLOW, "sdlc_store_memory": typer.colors.BLUE}
         
         agent_tracer.info(f"\n[EXECUTING NATIVE COMMAND]:\n{cmd_str}\n")
-        global_logger.info(f"{icons.get(call.name, '⚙️')} Native CLI Called: {cmd_str}", extra={"color": colors.get(call.name, typer.colors.WHITE), "truncate_console": 150})
+        global_logger.info(f"{icons.get(call.name, '⚙️')} [{iteration_count:03}/{max_context_iterations:03}] Native CLI: {cmd_str}", extra={"color": colors.get(call.name, typer.colors.WHITE), "truncate_console": 150})
         
         if call.name == "sdlc_query_state":
             output = sdlc_query_state(**call.args)

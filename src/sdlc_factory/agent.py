@@ -11,6 +11,7 @@ from google import genai
 from google.genai import types
 import uuid
 import re
+import hashlib
 import os
 from openinference.instrumentation import using_session
 
@@ -200,7 +201,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
             exec_cwd = str(session_cwd)
         
         agent_tracer.info(f"\n[EXECUTING COMMAND in {exec_cwd}]:\n{cmd}\n")
-        prefix = typer.style(f"{log_prefix} Running CLI:", fg=typer.colors.WHITE)
+        prefix = f"{log_prefix} " + typer.style("Running CLI:", fg=typer.colors.WHITE)
         cmd_colored = typer.style(cmd, fg=typer.colors.GREEN)
         global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
         if cmd.startswith("cd "):
@@ -222,7 +223,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
         cmd_name = call.name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
         cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call.args.items()])
         
-        prefix = typer.style(f"{log_prefix} Native CLI:", fg=typer.colors.WHITE)
+        prefix = f"{log_prefix} " + typer.style("Native CLI:", fg=typer.colors.WHITE)
         cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
         agent_tracer.info(f"\n[EXECUTING NATIVE COMMAND]:\n{cmd_str}\n")
         global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
@@ -275,6 +276,8 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
     target_temp = float(agent_config.get("temperature", 0.0))
     agent_max_iterations = int(agent_config.get("max_iterations", 25))
+    session_context_limit = int(config_data.get("session_context_limit", 2000000))
+    warning_context_limit = session_context_limit * 0.5
 
     client = _setup_client(config_data, system_instruction, target_temp)
     config = _get_genai_config(system_instruction, target_temp)
@@ -326,8 +329,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             response = _send_with_retry(chat, session_id, session_file, prompt)
         
         iteration_count = 0
-        last_call_signature = None
-        consecutive_call_count = 0
+        historical_signatures = []
         
         while True:
             iteration_count += 1
@@ -354,6 +356,14 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     hist_size = 0
                 context_bytes = len(system_instruction.encode("utf-8")) + hist_size
                 context_size_str = format_size(context_bytes)
+                
+                if context_bytes > session_context_limit:
+                    global_logger.error(f"🚨 OOM SAFEGUARD: Context size exceeded {format_size(session_context_limit)} ({context_size_str}). Aborting.", extra={"bold": True})
+                    abort("Agent context size exceeded the safety threshold. Halting factory daemon.")
+                    
+                if context_bytes > warning_context_limit:
+                    context_size_str = typer.style(context_size_str, fg=typer.colors.RED, bold=True)
+                    
                 log_prefix = f"[{iteration_count:03}/{agent_max_iterations:03} - {context_size_str}]"
                 
                 current_call_signature = json.dumps(
@@ -361,15 +371,23 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     sort_keys=True
                 )
                 
-                if current_call_signature == last_call_signature:
-                    consecutive_call_count += 1
-                else:
-                    consecutive_call_count = 1
-                    last_call_signature = current_call_signature
-                    
-                if consecutive_call_count >= 4:
-                    global_logger.error("🚨 FATAL REPETITION LOOP: 4 identical tool calls detected. Aborting.", extra={"bold": True})
-                    abort(f"Agent trapped in repetitive tool loop using: {current_call_signature}")
+                md5_hash = hashlib.md5(current_call_signature.encode("utf-8")).hexdigest()
+                historical_signatures.append(md5_hash)
+                
+                loop_detected = False
+                warning_loop_detected = False
+                for w in range(1, 8):
+                    if len(historical_signatures) >= w * 4:
+                        if historical_signatures[-w:] == historical_signatures[-2*w:-w] == historical_signatures[-3*w:-2*w] == historical_signatures[-4*w:-3*w]:
+                            loop_detected = True
+                            break
+                    if len(historical_signatures) >= w * 3:
+                        if historical_signatures[-w:] == historical_signatures[-2*w:-w] == historical_signatures[-3*w:-2*w]:
+                            warning_loop_detected = True
+                            
+                if loop_detected:
+                    global_logger.error(f"🚨 FATAL REPETITION LOOP: Cyclical tool repetition detected (Pattern size {w}). Aborting.", extra={"bold": True})
+                    abort(f"Agent trapped in repetitive tool loop using pattern size {w}: {current_call_signature}")
 
                 tool_results = []
                 for i, call in enumerate(response.function_calls):
@@ -389,13 +407,13 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                                 ))
                             break
                     
-                    if consecutive_call_count == 3:
+                    if warning_loop_detected:
                         output = (
-                            f"SYSTEM INTERVENTION: You have executed the tool '{call.name}' with the exact same arguments 3 times in a row. "
-                            "You are stuck in a logical loop. DO NOT repeat this action. "
+                            f"SYSTEM INTERVENTION: You are executing a cyclical sequence of tools. "
+                            "You are stuck in a logical loop. DO NOT repeat this action sequence. "
                             "Evaluate the previous errors and try a completely different approach. "
                             "If you cannot resolve this, DO NOT force a success state. Instead, write an escalation report to 'issues/ISSUE-FATAL.md' "
-                            "via the CLI and advance the state to BLOCKED. A 4th attempt of this exact tool call will trigger a hard system abort."
+                            "via the CLI and advance the state to BLOCKED. A 4th attempt of this exact sequence will trigger a hard system abort."
                         )
                         global_logger.warning(f"⚠️ Injecting Repetition Intervention for '{call.name}'", extra={"color": typer.colors.YELLOW})
                         

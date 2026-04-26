@@ -14,7 +14,7 @@ import re
 import os
 from openinference.instrumentation import using_session
 
-from sdlc_factory.utils import get_config, global_logger, abort
+from sdlc_factory.utils import get_config, abort, global_logger, get_workspace, format_size
 
 from sdlc_factory.tools import (
     run_cli_command,
@@ -172,7 +172,7 @@ def _get_tree_prompt(session_cwd: Path) -> str:
         prompt_addition += f"\n\n## WORKSPACE DIRECTORY TREE\nError fetching tree: {e}\n\n"
     return prompt_addition
 
-def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_count: int, max_context_iterations: int, agent_tracer: logging.Logger) -> Tuple[types.Part, Path]:
+def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> Tuple[types.Part, Path]:
     if call.name == "run_cli_command":
         cmd = call.args.get("command", "").strip()
         req_cwd = call.args.get("cwd", None)
@@ -183,7 +183,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
             exec_cwd = str(session_cwd)
         
         agent_tracer.info(f"\n[EXECUTING COMMAND in {exec_cwd}]:\n{cmd}\n")
-        global_logger.info(f"🔧 [{iteration_count:03}/{max_context_iterations:03}] Running CLI: {cmd}", extra={"color": typer.colors.MAGENTA, "truncate_console": 150})
+        global_logger.info(f"🔧 {log_prefix} Running CLI: {cmd}", extra={"color": typer.colors.MAGENTA, "truncate_console": 150})
         if cmd.startswith("cd "):
             target = re.split(r'&&|;', cmd)[0][3:].strip().strip("'\"")
             new_cwd = Path(exec_cwd).joinpath(target).resolve()
@@ -207,7 +207,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
         colors = {"sdlc_query_state": typer.colors.CYAN, "sdlc_context": typer.colors.MAGENTA, "sdlc_advance_state": typer.colors.GREEN, "sdlc_search_codebase": typer.colors.YELLOW, "sdlc_store_memory": typer.colors.BLUE}
         
         agent_tracer.info(f"\n[EXECUTING NATIVE COMMAND]:\n{cmd_str}\n")
-        global_logger.info(f"{icons.get(call.name, '⚙️')} [{iteration_count:03}/{max_context_iterations:03}] Native CLI: {cmd_str}", extra={"color": colors.get(call.name, typer.colors.WHITE), "truncate_console": 150})
+        global_logger.info(f"{icons.get(call.name, '⚙️')} {log_prefix} Native CLI: {cmd_str}", extra={"color": colors.get(call.name, typer.colors.WHITE), "truncate_console": 150})
         
         if call.name == "sdlc_query_state":
             output = sdlc_query_state(**call.args)
@@ -236,7 +236,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, iteration_coun
         response={"result": output}
     ), session_cwd
 
-def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False):
+def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
     """Executes the Antigravity subagent directly using the genai SDK."""
     agent_tracer = logging.getLogger(f"sdlc_factory.agent.{agent_name}")
 
@@ -245,9 +245,13 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     setup_telemetry(config_data)
     
     session_id = session_id or f"{agent_name}-{str(uuid.uuid4())[:6]}"
-    agents_root = config_data.get("agents_root")
-    if not agents_root:
-        abort("ERROR: 'agents_root' is not defined in the configuration (~/.sdlc-factory.json).")
+    
+    from sdlc_factory.workflows import get_workflow
+    workflow = get_workflow(workflow_name)
+    agents_root = workflow.agents_dir
+    
+    if not agents_root.exists():
+        abort(f"ERROR: Agents directory not found at {agents_root}")
 
     exclude_files = exclude_files or []
     system_instruction = _build_system_instruction(agent_name, Path(agents_root), exclude_files)
@@ -265,7 +269,10 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     client = _setup_client(config_data, system_instruction, target_temp)
     config = _get_genai_config(system_instruction, target_temp)
     
-    session_dir = Path(agents_root) / "sessions"
+    sessions_root = config_data.get("sessions_root")
+    if not sessions_root:
+        abort("ERROR: 'sessions_root' is not defined in the configuration.")
+    session_dir = Path(sessions_root)
     session_dir.mkdir(parents=True, exist_ok=True)
     session_file = session_dir / f"{session_id}.session"
 
@@ -331,6 +338,14 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 agent_tracer.info(f"\n[AGENT THOUGHTS]\n{agent_text}\n")
             
             if response.function_calls:
+                try:
+                    hist_size = len(json.dumps([c.model_dump() for c in chat.get_history()]).encode("utf-8")) if chat.get_history() else 0
+                except Exception:
+                    hist_size = 0
+                context_bytes = len(system_instruction.encode("utf-8")) + hist_size
+                context_size_str = format_size(context_bytes)
+                log_prefix = f"[{iteration_count:03}/{agent_max_iterations:03} - {context_size_str}]"
+                
                 current_call_signature = json.dumps(
                     [{"name": c.name, "args": dict(c.args or {})} for c in response.function_calls],
                     sort_keys=True
@@ -381,7 +396,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         continue
 
                     part, session_cwd = _process_tool_call(
-                        call, session_cwd, cli_timeout, iteration_count, agent_max_iterations, agent_tracer
+                        call, session_cwd, cli_timeout, log_prefix, agent_tracer
                     )
                     tool_results.append(part)
 

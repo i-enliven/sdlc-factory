@@ -43,7 +43,7 @@ def test_execute_agent_function_call(mocker, tmp_path):
     mock_workflow.agents_dir = tmp_path
     mocker.patch("sdlc_factory.workflows.get_workflow", return_value=mock_workflow)
     mocker.patch("sdlc_factory.telemetry.setup_telemetry")
-    mocker.patch("sdlc_factory.agent.run_cli_command", return_value="ls output")
+    mock_workflow.process_tool_call.return_value = ("faked", tmp_path)
     
     mock_client_class = mocker.patch("google.genai.Client", create=True)
     mock_client = mock_client_class.return_value

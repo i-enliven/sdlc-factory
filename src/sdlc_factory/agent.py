@@ -18,7 +18,6 @@ from openinference.instrumentation import using_session
 from sdlc_factory.utils import get_config, abort, global_logger, get_workspace, format_size
 
 from sdlc_factory.tools import (
-    run_cli_command,
     sdlc_advance_state,
     sdlc_search_codebase,
     sdlc_store_memory
@@ -62,17 +61,20 @@ def _setup_client(config_data: dict, system_instruction: str, target_temp: float
         client = genai.Client(api_key=api_key, http_options={'timeout': 300000}) if api_key else genai.Client(http_options={'timeout': 300000})        
     return client
 
-def _get_genai_config(system_instruction: str, target_temp: float) -> types.GenerateContentConfig:
+def _get_genai_config(system_instruction: str, target_temp: float, workflow) -> types.GenerateContentConfig:
+    tools_list = [
+        sdlc_advance_state,
+        sdlc_search_codebase,
+        sdlc_store_memory
+    ]
+    if hasattr(workflow, "tools") and workflow.tools:
+        tools_list.extend(workflow.tools)
+        
     return types.GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=target_temp,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        tools=[
-            run_cli_command,
-            sdlc_advance_state,
-            sdlc_search_codebase,
-            sdlc_store_memory
-        ]
+        tools=tools_list
     )
 
 def _save_session(chat, session_file: Path):
@@ -189,37 +191,8 @@ def _get_tree_prompt(session_cwd: Path) -> str:
     except Exception as e:
         prompt_addition += f"\n\n## WORKSPACE DIRECTORY TREE\nError fetching tree: {e}\n\n"
     return prompt_addition
-
-def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> Tuple[types.Part, Path]:
-    if call.name == "run_cli_command":
-        cmd = call.args.get("command", "").strip()
-        req_cwd = call.args.get("cwd", None)
-        
-        if req_cwd:
-            exec_cwd = str(Path(session_cwd).joinpath(req_cwd).resolve())
-        else:
-            exec_cwd = str(session_cwd)
-        
-        agent_tracer.info(f"\n[EXECUTING COMMAND in {exec_cwd}]:\n{cmd}\n")
-        prefix = f"{log_prefix} " + typer.style("Running CLI:", fg=typer.colors.WHITE)
-        cmd_colored = typer.style(cmd, fg=typer.colors.GREEN)
-        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
-        if cmd.startswith("cd "):
-            target = re.split(r'&&|;', cmd)[0][3:].strip().strip("'\"")
-            new_cwd = Path(exec_cwd).joinpath(target).resolve()
-            
-            if new_cwd.exists() and new_cwd.is_dir():
-                session_cwd = new_cwd
-                if "&&" not in cmd and ";" not in cmd:
-                    output = f"Successfully changed directory to {session_cwd}"
-                else:
-                    output = run_cli_command(cmd, exec_cwd, timeout=cli_timeout)
-            else:
-                output = f"bash: cd: {target}: No such file or directory"
-        else:
-            output = run_cli_command(cmd, exec_cwd, timeout=cli_timeout)
-            
-    elif call.name.startswith("sdlc_"):
+def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger, workflow) -> Tuple[types.Part, Path]:
+    if call.name.startswith("sdlc_"):
         cmd_name = call.name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
         cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call.args.items()])
         
@@ -233,6 +206,18 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
             output = sdlc_search_codebase(**call.args)
         elif call.name == "sdlc_store_memory":
             output = sdlc_store_memory(**call.args)
+        else:
+            output = f"SYSTEM ERROR: Unhandled SDLC tool '{call.name}'"
+            global_logger.warning(f"❌ Unhandled SDLC tool '{call.name}'")
+            
+        agent_tracer.info(f"[OUTPUT]:\n{output}\n")
+        
+        return types.Part.from_function_response(
+            name=call.name,
+            response={"result": output}
+        ), session_cwd
+    elif hasattr(workflow, "process_tool_call"):
+        return workflow.process_tool_call(call, session_cwd, cli_timeout, log_prefix, agent_tracer)
     else:
         output = (
             f"SYSTEM ERROR: Tool '{call.name}' is not available in this context. "
@@ -241,13 +226,12 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
             "['run_cli_command', 'sdlc_advance_state', 'sdlc_search_codebase', 'sdlc_store_memory']."
         )
         global_logger.warning(f"❌ Hallucination Detected: Unknown tool '{call.name}'")
-    
-    agent_tracer.info(f"[OUTPUT]:\n{output}\n")
-    
-    return types.Part.from_function_response(
-        name=call.name,
-        response={"result": output}
-    ), session_cwd
+        agent_tracer.info(f"[OUTPUT]:\n{output}\n")
+        
+        return types.Part.from_function_response(
+            name=call.name,
+            response={"result": output}
+        ), session_cwd
 
 def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
     """Executes the subagent directly using the genai SDK."""
@@ -280,7 +264,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     warning_context_limit = session_context_limit * 0.5
 
     client = _setup_client(config_data, system_instruction, target_temp)
-    config = _get_genai_config(system_instruction, target_temp)
+    config = _get_genai_config(system_instruction, target_temp, workflow)
     
     sessions_root = config_data.get("sessions_root")
     if not sessions_root:
@@ -424,7 +408,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         continue
 
                     part, session_cwd = _process_tool_call(
-                        call, session_cwd, cli_timeout, log_prefix, agent_tracer
+                        call, session_cwd, cli_timeout, log_prefix, agent_tracer, workflow
                     )
                     tool_results.append(part)
 

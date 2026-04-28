@@ -19,6 +19,7 @@ def main_callback():
 
 @app.command(name="version")
 def show_version():
+    """Outputs the current version of sdlc-factory."""
     try:
         ver = metadata.version("sdlc-factory")
         print(f"sdlc-factory version {ver}")
@@ -27,6 +28,7 @@ def show_version():
 
 @app.command()
 def config(workspace_root: str = typer.Option(..., help="Absolute path to the SDLC Factory shared workspace")):
+    """Sets the global configuration for SDLC Factory."""
     from sdlc_factory.utils import CONFIG_FILE, write_json
     cfg = {"workspace_root": str(Path(workspace_root).expanduser().resolve())}
     write_json(CONFIG_FILE, cfg)
@@ -38,6 +40,7 @@ def init(
     requirements_file: Optional[Path] = typer.Option(None, "-f", "--file", help="Path to initial requirements file"),
     workflow: str = typer.Option("sdlc", "--workflow", help="The name of the workflow plugin to run")
 ):
+    """Initializes a new SDLC Factory workspace for a given task ID."""
     ws = get_workspace(task_id)
     if ws.exists():
         abort(f"Workspace {task_id} already exists.")
@@ -59,6 +62,7 @@ def init(
 
 @app.command()
 def query_state(agent: str = typer.Option(None), check_blocked: bool = typer.Option(False, "--check-blocked")):
+    """Queries the pending tasks or blocked states across the active ledger."""
     if check_blocked:
         blocked = get_blocked_tasks()
         if blocked:
@@ -66,7 +70,26 @@ def query_state(agent: str = typer.Option(None), check_blocked: bool = typer.Opt
         raise typer.Exit(0)
 
     if not agent:
-        abort("Must provide --agent unless using --check-blocked")
+        from sdlc_factory.state import get_active_workflows
+        from sdlc_factory.workflows import get_workflow
+        
+        all_agents = []
+        for wf_name in get_active_workflows():
+            try:
+                wf = get_workflow(wf_name)
+                for ag in wf.agents_list:
+                    if ag not in all_agents:
+                        all_agents.append(ag)
+            except Exception:
+                pass
+                
+        for ag in all_agents:
+            typer.echo(ag)
+            task = get_pending_task(ag)
+            if task:
+                task["status"] = "success"
+                print(json.dumps(task, indent=2))
+        raise typer.Exit(0)
 
     task = get_pending_task(agent)
     if task:
@@ -76,10 +99,12 @@ def query_state(agent: str = typer.Option(None), check_blocked: bool = typer.Opt
 
 @app.command()
 def context(task_id: str = typer.Option(...), module: str = typer.Option(...), agent: str = typer.Option(None, help="The active agent role (e.g. coder) for memory resolution.")):
+    """Outputs the current spatial and historic memory context for an agent."""
     print(json.dumps(build_context(task_id, module, agent), indent=2))
 
 @app.command()
 def advance_state(task_id: str = typer.Option(...), to: str = typer.Option(...), regression: bool = typer.Option(False, "--regression")):
+    """Advances the SDLC pipeline phase natively."""
     try:
         do_advance_state(task_id, to, regression)
     except Exception as e:
@@ -87,10 +112,12 @@ def advance_state(task_id: str = typer.Option(...), to: str = typer.Option(...),
 
 @app.command()
 def index_codebase(repo_dir: str = typer.Option(...)):
+    """Indexes a local codebase directory using pgvector embeddings."""
     do_index_codebase(repo_dir)
 
 @app.command()
 def search_codebase(query: str = typer.Option(...), limit: int = typer.Option(3)):
+    """Searches the codebase vector store for semantic matches to the query."""
     results = do_search_codebase(query, limit)
     if not results:
         global_logger.warning("No results found.")

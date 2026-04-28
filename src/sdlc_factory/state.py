@@ -114,8 +114,8 @@ def get_blocked_tasks() -> list:
             })
     return blocked
 
-def get_pending_task(agent: str) -> Optional[dict]:
-    """Internal helper to fetch the first available task for a specific agent across all active workflows."""
+def get_active_workflows() -> set:
+    """Returns a set of all active workflow names based on existing workspaces."""
     active_workflows = set(["sdlc"])
     workspace_root = get_workspace_root()
     if workspace_root.exists():
@@ -125,11 +125,14 @@ def get_pending_task(agent: str) -> Optional[dict]:
                 if state_file.exists():
                     state = read_json(state_file)
                     active_workflows.add(state.get("workflow", "sdlc"))
+    return active_workflows
 
-    for wf_name in active_workflows:
+def get_pending_task(agent: str) -> Optional[dict]:
+    """Internal helper to fetch the first available task for a specific agent across all active workflows."""
+    for wf_name in get_active_workflows():
         try:
             workflow = get_workflow(wf_name)
-            task = workflow.get_pending_task(agent, workspace_root)
+            task = workflow.get_pending_task(agent, get_workspace_root())
             if task:
                 return task
         except Exception:

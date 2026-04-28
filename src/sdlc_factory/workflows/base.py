@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
+import logging
 
 class WorkflowPlugin(ABC):
     """
@@ -66,3 +67,31 @@ class WorkflowPlugin(ABC):
         Handles error budgeting, trace writing, and workspace bubbling.
         """
         pass
+    @property
+    @abstractmethod
+    def tools(self) -> List[Any]:
+        """Returns a list of workflow-specific tools for the agent."""
+        pass
+
+    def process_tool_call(self, call: Any, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> Tuple[Any, Path]:
+        """
+        Processes a workflow-specific tool call by dynamically dispatching to `handle_<tool_name>`.
+        Returns a tuple of (tool_response_part, updated_session_cwd).
+        """
+        from google.genai import types
+        from sdlc_factory.utils import global_logger
+        
+        handler_name = f"handle_{call.name}"
+        handler = getattr(self, handler_name, None)
+        
+        if handler and callable(handler):
+            return handler(call, session_cwd, cli_timeout, log_prefix, agent_tracer)
+            
+        # Fallback for unrecognized tool in this workflow
+        output = f"SYSTEM ERROR: Tool '{call.name}' is not handled by this workflow."
+        global_logger.warning(f"❌ Unhandled plugin tool '{call.name}'")
+        agent_tracer.info(f"[OUTPUT]:\n{output}\n")
+        return types.Part.from_function_response(
+            name=call.name,
+            response={"result": output}
+        ), session_cwd

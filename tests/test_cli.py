@@ -56,7 +56,8 @@ def test_init_with_file(tmp_path):
 
 def test_query_state_no_agent():
     result = runner.invoke(app, ["query-state"])
-    assert result.exit_code == 1
+    assert result.exit_code == 0
+    assert "planner" in result.stdout
 
 def test_query_state(mocker):
     mocker.patch("sdlc_factory.cli.get_pending_task", return_value={"task_id": "test-task"})

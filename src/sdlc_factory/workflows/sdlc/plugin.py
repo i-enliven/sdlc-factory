@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from sdlc_factory.workflows.base import WorkflowPlugin
+import re
+import logging
+from google.genai import types
+from .tools import run_cli_command
 from sdlc_factory.utils import global_logger, read_json, write_json, get_workspace
 
 class SdlcWorkflow(WorkflowPlugin):
@@ -35,6 +39,45 @@ class SdlcWorkflow(WorkflowPlugin):
     @property
     def agents_list(self) -> List[str]:
         return ["planner", "architect", "tester", "coder", "deployer", "monitor"]
+
+    @property
+    def tools(self) -> List[Any]:
+        return [run_cli_command]
+
+    def handle_run_cli_command(self, call: Any, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> tuple[Any, Path]:
+        cmd = call.args.get("command", "").strip()
+        req_cwd = call.args.get("cwd", None)
+        
+        if req_cwd:
+            exec_cwd = str(Path(session_cwd).joinpath(req_cwd).resolve())
+        else:
+            exec_cwd = str(session_cwd)
+        
+        agent_tracer.info(f"\n[EXECUTING COMMAND in {exec_cwd}]:\n{cmd}\n")
+        prefix = f"{log_prefix} " + typer.style("Running CLI:", fg=typer.colors.WHITE)
+        cmd_colored = typer.style(cmd, fg=typer.colors.GREEN)
+        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
+        if cmd.startswith("cd "):
+            target = re.split(r'&&|;', cmd)[0][3:].strip().strip("'\"")
+            new_cwd = Path(exec_cwd).joinpath(target).resolve()
+            
+            if new_cwd.exists() and new_cwd.is_dir():
+                session_cwd = new_cwd
+                if "&&" not in cmd and ";" not in cmd:
+                    output = f"Successfully changed directory to {session_cwd}"
+                else:
+                    output = run_cli_command(cmd, exec_cwd, timeout=cli_timeout)
+            else:
+                output = f"bash: cd: {target}: No such file or directory"
+        else:
+            output = run_cli_command(cmd, exec_cwd, timeout=cli_timeout)
+            
+        agent_tracer.info(f"[OUTPUT]:\n{output}\n")
+        
+        return types.Part.from_function_response(
+            name=call.name,
+            response={"result": output}
+        ), session_cwd
 
     def get_pending_task(self, agent: str, workspace_root: Path) -> Optional[dict]:
         phase_map = {

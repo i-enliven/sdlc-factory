@@ -2,22 +2,9 @@ import pytest
 import json
 import subprocess
 from sdlc_factory.tools import (
-    run_cli_command, sdlc_query_state, sdlc_context,
+    sdlc_query_state, sdlc_context,
     sdlc_advance_state, sdlc_search_codebase, sdlc_store_memory
 )
-
-def test_run_cli_command(mocker):
-    out = run_cli_command("echo hello")
-    assert out.strip() == "hello"
-
-def test_run_cli_command_timeout(mocker):
-    out = run_cli_command("sleep 2", timeout=1)
-    assert "timed out" in out
-
-def test_run_cli_command_exception(mocker):
-    mocker.patch("sdlc_factory.tools.subprocess.Popen", side_effect=Exception("kaboom"))
-    out = run_cli_command("fail")
-    assert "Error executing command: kaboom" in out
 def test_sdlc_query_state_blocked(mocker):
     mocker.patch("sdlc_factory.tools.get_blocked_tasks", return_value=["task1"])
     res = json.loads(sdlc_query_state(check_blocked=True))

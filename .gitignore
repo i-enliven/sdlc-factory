@@ -1,6 +1,5 @@
 workspace
 artifacts
-prds
 src/sdlc_factory.egg-info
 dist/
 build/

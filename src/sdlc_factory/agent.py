@@ -175,7 +175,7 @@ def _save_session(messages: list[dict], session_file: Path):
     except Exception as e:
         global_logger.warning(f"Failed to serialize session history: {e}")
 
-def _send_with_retry(client, messages, tools, target_model, target_temp, session_id: str, session_file: Path, max_retries=20, base_delay=5):
+def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5):
     time.sleep(0.5)
     for attempt in range(max_retries):
         try:
@@ -184,12 +184,67 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, session
                     model=target_model,
                     messages=messages,
                     tools=tools,
-                    temperature=target_temp
+                    temperature=target_temp,
+                    max_tokens=target_max_tokens,
+                    stream=True
                 )
-                assistant_msg = res.choices[0].message
-                messages.append(assistant_msg)
+                
+                full_content = ""
+                tool_calls_dict = {}
+                
+                for chunk in res:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        full_content += delta.content
+                        typer.secho(delta.content, nl=False, fg=typer.colors.CYAN)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = tc.index
+                            if idx not in tool_calls_dict:
+                                tool_calls_dict[idx] = {
+                                    "id": tc.id or "",
+                                    "type": "function",
+                                    "function": {"name": tc.function.name or "", "arguments": tc.function.arguments or ""}
+                                }
+                            else:
+                                if tc.id:
+                                    tool_calls_dict[idx]["id"] += tc.id
+                                if tc.function.name:
+                                    tool_calls_dict[idx]["function"]["name"] += tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_dict[idx]["function"]["arguments"] += tc.function.arguments
+
+                if full_content:
+                    typer.secho("")
+                
+                from types import SimpleNamespace
+                final_tool_calls = []
+                for idx in sorted(tool_calls_dict.keys()):
+                    tc = tool_calls_dict[idx]
+                    func = SimpleNamespace(name=tc["function"]["name"], arguments=tc["function"]["arguments"])
+                    final_tool_calls.append(SimpleNamespace(id=tc["id"], type="function", function=func))
+                
+                assistant_msg = SimpleNamespace(role="assistant", content=full_content, tool_calls=final_tool_calls if final_tool_calls else None)
+                
+                assistant_msg_dict = {
+                    "role": "assistant",
+                    "content": full_content,
+                }
+                if final_tool_calls:
+                    assistant_msg_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                        } for tc in final_tool_calls
+                    ]
+                    
+                messages.append(assistant_msg_dict)
                 _save_session(messages, session_file)
-                return res
+                
+                return SimpleNamespace(choices=[SimpleNamespace(message=assistant_msg)])
         except Exception as e:
             error_str = str(e).lower()
             error_name = type(e).__name__.lower()
@@ -366,6 +421,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     session_context_limit = int(config_data.get("session_context_limit", 2000000))
     warning_context_limit = session_context_limit * 0.5
     max_history_messages = int(config_data.get("max_history_messages", 40))
+    target_max_tokens = int(config_data.get("generation_max_tokens", 24000))
 
     client = _setup_client(config_data, system_instruction, target_temp)
     tools_schema = _get_tools_schema(workflow)
@@ -412,15 +468,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             if user_msg:
                 messages.append({"role": "user", "content": user_msg})
                 messages = _prune_messages(messages, max_history_messages)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:
                 messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
                 messages = _prune_messages(messages, max_history_messages)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
         else:
             messages.append({"role": "user", "content": prompt})
             messages = _prune_messages(messages, max_history_messages)
-            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
+            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
         
         iteration_count = 0
         historical_signatures = []
@@ -528,14 +584,14 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
 
                 messages.extend(tool_results)
                 messages = _prune_messages(messages, max_history_messages)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:
                 if HUMAN_PAUSE_REQUESTED:
                     user_msg = _handle_human_pause()
                     if user_msg:
                         messages.append({"role": "user", "content": user_msg})
                         messages = _prune_messages(messages, max_history_messages)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
                         continue
                 break
                 

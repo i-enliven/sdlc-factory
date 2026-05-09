@@ -16,11 +16,12 @@ def test_execute_agent_basic(mocker, tmp_path):
     mock_client_class = mocker.patch("sdlc_factory.agent.OpenAI", create=True)
     mock_client = mock_client_class.return_value
     mock_chat = mocker.MagicMock()
-    mock_response = mocker.MagicMock()
-    mock_response.choices = [mocker.MagicMock()]
-    mock_response.choices[0].message.tool_calls = []
-    mock_response.choices[0].message.content = "hello from agent"
-    mock_client.chat.completions.create.return_value = mock_response
+    mock_chunk = mocker.MagicMock()
+    mock_chunk.choices = [mocker.MagicMock()]
+    mock_chunk.choices[0].delta.content = "hello from agent"
+    mock_chunk.choices[0].delta.tool_calls = []
+    
+    mock_client.chat.completions.create.return_value = [mock_chunk]
     
     mocker.patch("sdlc_factory.agent.using_session", return_value=mocker.MagicMock())
     
@@ -46,22 +47,24 @@ def test_execute_agent_function_call(mocker, tmp_path):
 
 
     mocker.patch("sdlc_factory.agent.using_session", return_value=mocker.MagicMock())
-
-    mock_response_1 = mocker.MagicMock()
-    mock_call = mocker.MagicMock()
-    mock_call.function.name = "run_cli_command"
-    mock_call.function.arguments = '{"command": "ls"}'
-    mock_response_1.choices = [mocker.MagicMock()]
-    mock_response_1.choices[0].message.tool_calls = [mock_call]
-    mock_response_1.choices[0].message.content = "I will run ls"
+    mock_chunk_1 = mocker.MagicMock()
+    mock_chunk_1.choices = [mocker.MagicMock()]
+    mock_chunk_1.choices[0].delta.content = "I will run ls"
+    mock_tc = mocker.MagicMock()
+    mock_tc.index = 0
+    mock_tc.id = "call_123"
+    mock_tc.function.name = "run_cli_command"
+    mock_tc.function.arguments = '{"command": "ls"}'
+    mock_chunk_1.choices[0].delta.tool_calls = [mock_tc]
     
-    mock_response_2 = mocker.MagicMock()
-    mock_response_2.choices = [mocker.MagicMock()]
-    mock_response_2.choices[0].message.tool_calls = []
-    mock_response_2.choices[0].message.content = "ls finished"
+    mock_chunk_2 = mocker.MagicMock()
+    mock_chunk_2.choices = [mocker.MagicMock()]
+    mock_chunk_2.choices[0].delta.content = "ls finished"
+    mock_chunk_2.choices[0].delta.tool_calls = []
     
-    mock_client.chat.completions.create.side_effect = [mock_response_1, mock_response_2]
+    mock_client.chat.completions.create.side_effect = [[mock_chunk_1], [mock_chunk_2]]
     
     res = execute_agent("testagent", "do ls")
     assert res == "ls finished"
+    assert mock_client.chat.completions.create.call_count == 2
     assert mock_client.chat.completions.create.call_count == 2

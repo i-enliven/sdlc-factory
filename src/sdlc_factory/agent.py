@@ -182,7 +182,7 @@ def _prune_messages(messages: list, max_tokens: int) -> list:
     pruned = system_msgs + other_msgs
     if len(pruned) < len(messages):
         new_tokens = _estimate_tokens(pruned)
-        global_logger.info(f"✂️ Pruned conversation history from {len(messages)} to {len(pruned)} messages ({original_tokens} -> {new_tokens} estimated tokens) to conserve tokens.", extra={"color": typer.colors.CYAN})
+        global_logger.info(f"✂️ Pruned conversation history from {len(messages)} to {len(pruned)} messages ({original_tokens} -> {new_tokens} estimated tokens) to conserve tokens.", extra={"color": typer.colors.WHITE})
     return pruned
 
 def _save_session(messages: list[dict], session_file: Path):
@@ -515,6 +515,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
         iteration_count = 0
         tool_execution_count = 0
         historical_signatures = []
+        empty_response_count = 0
         
         while True:
             iteration_count += 1
@@ -530,6 +531,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 agent_tracer.info(f"\n[AGENT THOUGHTS]\n{agent_text}\n")
             
             if response and response.choices and response.choices[0].message.tool_calls:
+                empty_response_count = 0
                 context_tokens = _estimate_tokens(messages)
                 if context_tokens == 0:
                     context_tokens = len(system_instruction) // 4
@@ -613,6 +615,16 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 messages = _prune_messages(messages, prune_token_limit)
                 response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:
+                agent_content = response.choices[0].message.content if response and response.choices else ""
+                if not agent_content.strip() and not (response and response.choices and response.choices[0].message.tool_calls):
+                    empty_response_count += 1
+                    if empty_response_count <= 3:
+                        global_logger.warning("⚠️ Empty response detected from LLM (possible EOS bug). Prompting to continue...", extra={"color": typer.colors.YELLOW})
+                        messages.append({"role": "user", "content": "SYSTEM: You generated an empty response without making any tool calls. If you are stuck, please explain why. Otherwise, please continue executing tools to complete the task."})
+                        messages = _prune_messages(messages, prune_token_limit)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+                        continue
+
                 if HUMAN_PAUSE_REQUESTED:
                     user_msg = _handle_human_pause()
                     if user_msg:

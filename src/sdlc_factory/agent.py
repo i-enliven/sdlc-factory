@@ -210,13 +210,24 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                 full_content = ""
                 tool_calls_dict = {}
                 
+                prev_char_was_newline = True
                 for chunk in res:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
                     if delta.content:
                         full_content += delta.content
-                        typer.secho(delta.content, nl=False, fg=typer.colors.CYAN)
+                        filtered_content = ""
+                        for char in delta.content:
+                            if char == '\n':
+                                if not prev_char_was_newline:
+                                    filtered_content += char
+                                prev_char_was_newline = True
+                            else:
+                                filtered_content += char
+                                prev_char_was_newline = False
+                        if filtered_content:
+                            typer.secho(filtered_content, nl=False, fg=typer.colors.CYAN)
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
                             idx = tc.index
@@ -234,7 +245,7 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                                 if tc.function.arguments:
                                     tool_calls_dict[idx]["function"]["arguments"] += tc.function.arguments
 
-                if full_content:
+                if full_content and not prev_char_was_newline:
                     typer.secho("")
                 
                 from types import SimpleNamespace
@@ -498,6 +509,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
         
         iteration_count = 0
+        tool_execution_count = 0
         historical_signatures = []
         
         while True:
@@ -525,8 +537,6 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 if context_tokens > prune_token_limit:
                     context_size_str = typer.style(context_size_str, fg=typer.colors.RED, bold=True)
                     
-                log_prefix = f"[{iteration_count:03}/{agent_max_iterations:03} - {context_size_str}]"
-                
                 current_call_signature = json.dumps(
                     [{"name": c.function.name, "args": c.function.arguments} for c in response.choices[0].message.tool_calls],
                     sort_keys=True
@@ -552,6 +562,8 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
 
                 tool_results = []
                 for i, call in enumerate(response.choices[0].message.tool_calls):
+                    tool_execution_count += 1
+                    log_prefix = f"[{tool_execution_count:03}/{agent_max_iterations:03} - {context_size_str}]"
                     
                     if HUMAN_PAUSE_REQUESTED:
                         override = _handle_human_pause(tool_results)

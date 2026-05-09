@@ -70,5 +70,6 @@ def test_run_heartbeat_cycle_idle(mocker, tmp_path):
     
     mock_execute = mocker.patch("sdlc_factory.heartbeat.execute_agent")
     
-    assert run_heartbeat_cycle() == False
-    mock_execute.assert_not_called()
+    assert run_heartbeat_cycle() == True
+    mock_execute.assert_called_once()
+    assert mock_execute.call_args[0][0] == "dreamer"

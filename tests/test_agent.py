@@ -20,6 +20,7 @@ def test_execute_agent_basic(mocker, tmp_path):
     mock_chunk.choices = [mocker.MagicMock()]
     mock_chunk.choices[0].delta.content = "hello from agent"
     mock_chunk.choices[0].delta.tool_calls = []
+    mock_chunk.model_dump.return_value = {"choices": [{"delta": {}}]}
     
     mock_client.chat.completions.create.return_value = [mock_chunk]
     
@@ -56,11 +57,17 @@ def test_execute_agent_function_call(mocker, tmp_path):
     mock_tc.function.name = "run_cli_command"
     mock_tc.function.arguments = '{"command": "ls"}'
     mock_chunk_1.choices[0].delta.tool_calls = [mock_tc]
+    mock_chunk_1.model_dump.return_value = {
+        "choices": [{"delta": {
+            "tool_calls": [{"index": 0, "id": "call_123", "function": {"name": "run_cli_command", "arguments": '{"command": "ls"}'}}]
+        }}]
+    }
     
     mock_chunk_2 = mocker.MagicMock()
     mock_chunk_2.choices = [mocker.MagicMock()]
     mock_chunk_2.choices[0].delta.content = "ls finished"
     mock_chunk_2.choices[0].delta.tool_calls = []
+    mock_chunk_2.model_dump.return_value = {"choices": [{"delta": {}}]}
     
     mock_client.chat.completions.create.side_effect = [[mock_chunk_1], [mock_chunk_2]]
     

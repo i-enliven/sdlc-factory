@@ -1,1 +1,0 @@
-shared/SKILL.md

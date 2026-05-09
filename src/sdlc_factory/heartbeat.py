@@ -11,10 +11,18 @@ from sdlc_factory.memory import build_context
 from sdlc_factory.agent import execute_agent
 from sdlc_factory.workflows import get_workflow
 
+_LAST_DREAMED_AGENT_INDEX = 0
+
 def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
     """Executes one pass of the pipeline. Returns True if a task was processed."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     global_logger.info(f"⏱️  Pulse Executed at {timestamp}")
+
+    # 0. Background Synthesis Override
+    if resume_session_id and resume_session_id.startswith("dreamer-"):
+        global_logger.info(f"🚀 Resuming dreamer (Background Synthesis) | Session: {resume_session_id}", extra={"color": typer.colors.GREEN})
+        execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc")
+        return True
 
     # 1. The Reasoner's Domain (Highest Priority)
     blocked_tasks = get_blocked_tasks()
@@ -96,5 +104,55 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
                 result = execute_agent(agent, prompt, exclude_files=None, session_id=session_id, is_resume=is_resume, workflow_name=wf_name)
                 typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.MAGENTA)
                 return True # Exit cycle to enforce strict cooldown
+
+    # 3. Idle Background Tasks (Dreaming)
+    if not resume_session_id:
+        global_logger.info("💤 Factory is idle. Waking Dreamer for background synthesis...", extra={"color": typer.colors.CYAN})
+        all_agents = []
+        for wf_name in active_workflows:
+            try:
+                wf = get_workflow(wf_name)
+                for ag in wf.agents_list:
+                    if ag not in all_agents and ag not in ["dreamer", "reasoner"]:
+                        all_agents.append(ag)
+            except Exception:
+                pass
+                
+        if all_agents:
+            workspace_root = get_workspace_root()
+            dreamer_state_file = workspace_root / ".state" / "dreamer_index.json"
+            
+            last_index = 0
+            if dreamer_state_file.exists():
+                try:
+                    last_index = json.loads(dreamer_state_file.read_text()).get("index", 0)
+                except Exception:
+                    pass
+                    
+            target_agent = all_agents[last_index % len(all_agents)]
+            
+            session_id = f"dreamer-{str(uuid.uuid4())[:6]}"
+            prompt = (
+                "# 🟢 HEARTBEAT_WAKEUP (BACKGROUND)\n"
+                f"The factory is currently idle. Execute your dreaming playbook to analyze historical traces and optimize memories specifically for the **{target_agent}** agent.\n\n"
+                "**Environmental Context:**\n"
+                "- OpenTelemetry Traces are managed by Arize Phoenix.\n"
+                f"- Use the `sdlc_query_traces` tool and pass `\"agent_name\": \"{target_agent}\"` to quickly find failed or recent traces specifically for this agent.\n"
+                "- Use the `sdlc_execute_sql` tool to run dynamic PostgreSQL queries against the `spans` table if you need to deeply inspect metadata, attributes, or trace correlation. The tool will automatically truncate massive JSON blobs so it is completely safe to use.\n"
+                "- NEVER write raw python `psycopg2` scripts. Always use your native tools.\n\n"
+                "**CRITICAL WORKFLOW:**\n"
+                f"1. Search for patterns or mistakes strictly for the **{target_agent}** agent in the recent traces. Ignore traces from other agents.\n"
+                f"2. Use `sdlc_store_memory` to save any extracted insights for the {target_agent} (do not write memories for anyone else).\n"
+                "3. ONCE YOU HAVE STORED A MEMORY, you MUST terminate your session. Do not keep querying. Terminate by replying with a final summary text and NO tool calls."
+            )
+            global_logger.info(f"🚀 Dispatching dreamer (Background Synthesis) | Target: {target_agent} | Session: {session_id}", extra={"color": typer.colors.GREEN})
+            execute_agent("dreamer", prompt, exclude_files=None, session_id=session_id, is_resume=False, workflow_name="sdlc")
+            
+            try:
+                dreamer_state_file.parent.mkdir(parents=True, exist_ok=True)
+                dreamer_state_file.write_text(json.dumps({"index": last_index + 1}))
+            except Exception:
+                pass
+            return True
 
     return False # No tasks found

@@ -80,3 +80,21 @@ def sdlc_web_search(query: str, domain: Optional[str] = None) -> str:
         return json.dumps({"status": "success", "results": top_results}, indent=2) if top_results else json.dumps({"status": "no_results"})
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})
+
+def sdlc_query_traces(query_type: str = "recent", session_id: Optional[str] = None, agent_name: Optional[str] = None, limit: int = 5, include_prompts: bool = False) -> str:
+    """Invokes 'sdlc-factory query-traces'. Safely queries OpenTelemetry spans."""
+    try:
+        from sdlc_factory.db import do_query_traces
+        results = do_query_traces(query_type, session_id=session_id, agent_name=agent_name, limit=limit, include_prompts=include_prompts)
+        return json.dumps({"status": "success", "results": results}, indent=2) if results else json.dumps({"status": "no_results"})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+def sdlc_execute_sql(query: str, parameters: Optional[list] = None) -> str:
+    """Invokes 'sdlc-factory execute-sql'. Safely executes raw SQL."""
+    try:
+        from sdlc_factory.db import do_execute_sql
+        results = do_execute_sql(query, parameters)
+        return json.dumps({"status": "success", "results": results}, indent=2)
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})

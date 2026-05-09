@@ -55,6 +55,7 @@ def test_do_store_memory(mocker, mock_db):
     conn, cursor = mock_db
     mocker.patch("sdlc_factory.memory.get_embedding", return_value=[0.1])
     mocker.patch("sdlc_factory.memory.get_db_connection", return_value=conn)
+    cursor.fetchone.return_value = ("some_resolution", 0.05)
     msg = do_store_memory("coder", "task_ctx", "resolution_data")
     assert "[coder MEMORY STORED]" in msg
 def test_do_index_codebase_exceptions(mocker, tmp_path, mock_db):

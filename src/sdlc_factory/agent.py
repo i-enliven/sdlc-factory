@@ -20,7 +20,9 @@ from sdlc_factory.tools import (
     sdlc_advance_state,
     sdlc_search_codebase,
     sdlc_web_search,
-    sdlc_store_memory
+    sdlc_store_memory,
+    sdlc_query_traces,
+    sdlc_execute_sql
 )
 
 HUMAN_PAUSE_REQUESTED = False
@@ -52,10 +54,14 @@ def _build_system_instruction(agent_name: str, agents_root: Path, exclude_files:
     return system_instruction
 
 
-def _setup_client(config_data: dict, system_instruction: str, target_temp: float) -> OpenAI:
+def _setup_client(config_data: dict, system_instruction: str, target_temp: float, provider: str = "vllm") -> OpenAI:
     import os
-    base_url = config_data.get("base_url", "http://sagittarius-a.mara-balance.ts.net:8100/v1")
-    api_key = config_data.get("vertex_api_key") or config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
+    if provider == "google":
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        api_key = config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or config_data.get("vertex_api_key") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
+    else:
+        base_url = config_data.get("vllm_base_url", "http://sagittarius-a.mara-balance.ts.net:8100/v1")
+        api_key = config_data.get("vertex_api_key") or config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
     api_timeout = float(config_data.get("api_timeout", 600.0))
     return OpenAI(base_url=base_url, api_key=api_key, timeout=api_timeout)
 
@@ -118,6 +124,43 @@ def _get_tools_schema(workflow) -> list[dict]:
                     "properties": {
                         "query": {"type": "string", "description": "The search query."},
                         "domain": {"type": "string", "description": "Optional domain to restrict the search to."}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sdlc_query_traces",
+                "description": "Safely queries OpenTelemetry telemetry spans from the database. Use this instead of running psycopg2 shell scripts to analyze historical agent executions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query_type": {"type": "string", "description": "The type of query to run: 'errors' (to find failed traces), 'llm' (to find LLM completions), or 'recent'."},
+                        "session_id": {"type": "string", "description": "Optional agent session ID to filter by."},
+                        "agent_name": {"type": "string", "description": "MANDATORY target agent name to restrict the search to. You MUST provide this."},
+                        "limit": {"type": "integer", "description": "Max number of traces to return (capped at 20)."},
+                        "include_prompts": {"type": "boolean", "description": "If true, extracts heavily truncated llm.prompt and llm.output fields."}
+                    },
+                    "required": ["query_type", "agent_name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sdlc_execute_sql",
+                "description": "Executes a raw SQL query safely against the telemetry Postgres database. All returned data is automatically truncated to prevent context window overflow. Use this to dynamically explore telemetry metadata, table structures, and complex historical correlations without writing raw psycopg2 python scripts.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The raw SQL query to execute."},
+                        "parameters": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional array of parameters for parameterizing the SQL query."
+                        }
                     },
                     "required": ["query"]
                 }
@@ -208,11 +251,13 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                     tools=tools,
                     temperature=target_temp,
                     max_tokens=target_max_tokens,
-                    stream=True
+                    stream=True,
+                    stream_options={"include_usage": True}
                 )
                 
                 full_content = ""
                 tool_calls_dict = {}
+                active_tool_idx = -1
                 
                 prev_char_was_newline = True
                 for chunk in res:
@@ -233,21 +278,33 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                         if filtered_content:
                             typer.secho(filtered_content, nl=False, fg=typer.colors.CYAN)
                     if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            idx = tc.index
+                        delta_dict = chunk.model_dump(exclude_unset=True).get("choices", [{}])[0].get("delta", {})
+                        tc_dicts = delta_dict.get("tool_calls", [])
+                        for tc, tc_dict in zip(delta.tool_calls, tc_dicts):
+                            if tc_dict.get("id"):
+                                active_tool_idx += 1
+                            if active_tool_idx == -1:
+                                active_tool_idx = 0
+                            
+                            idx = active_tool_idx
+                            
                             if idx not in tool_calls_dict:
-                                tool_calls_dict[idx] = {
-                                    "id": tc.id or "",
-                                    "type": "function",
-                                    "function": {"name": tc.function.name or "", "arguments": tc.function.arguments or ""}
-                                }
+                                import copy
+                                tool_calls_dict[idx] = copy.deepcopy(tc_dict)
                             else:
-                                if tc.id:
-                                    tool_calls_dict[idx]["id"] += tc.id
-                                if tc.function.name:
-                                    tool_calls_dict[idx]["function"]["name"] += tc.function.name
-                                if tc.function.arguments:
-                                    tool_calls_dict[idx]["function"]["arguments"] += tc.function.arguments
+                                if tc_dict.get("id"):
+                                    tool_calls_dict[idx]["id"] += tc_dict["id"]
+                                if tc_dict.get("function", {}).get("name"):
+                                    if "name" not in tool_calls_dict[idx]["function"]:
+                                        tool_calls_dict[idx]["function"]["name"] = ""
+                                    tool_calls_dict[idx]["function"]["name"] += tc_dict["function"]["name"]
+                                if tc_dict.get("function", {}).get("arguments"):
+                                    if "arguments" not in tool_calls_dict[idx]["function"]:
+                                        tool_calls_dict[idx]["function"]["arguments"] = ""
+                                    tool_calls_dict[idx]["function"]["arguments"] += tc_dict["function"]["arguments"]
+                                for k, v in tc_dict.items():
+                                    if k not in ["index", "id", "function", "type"]:
+                                        tool_calls_dict[idx][k] = v
 
                 if full_content and not prev_char_was_newline:
                     typer.secho("")
@@ -266,13 +323,12 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                     "content": full_content,
                 }
                 if final_tool_calls:
-                    assistant_msg_dict["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments}
-                        } for tc in final_tool_calls
-                    ]
+                    assistant_msg_dict["tool_calls"] = []
+                    for idx in sorted(tool_calls_dict.keys()):
+                        tc_dict = dict(tool_calls_dict[idx])
+                        if "index" in tc_dict:
+                            del tc_dict["index"]
+                        assistant_msg_dict["tool_calls"].append(tc_dict)
                     
                 messages.append(assistant_msg_dict)
                 _save_session(messages, session_file)
@@ -376,53 +432,98 @@ def _get_tree_prompt(session_cwd: Path) -> str:
     return prompt_addition
 def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger, workflow) -> Tuple[dict, Path]:
     call_name = call.function.name
-    call_args = json.loads(call.function.arguments) if isinstance(call.function.arguments, str) else call.function.arguments
-    if call_name.startswith("sdlc_"):
-        cmd_name = call_name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
-        cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call_args.items()])
-        
-        prefix = f"{log_prefix} " + typer.style("Native CLI:", fg=typer.colors.WHITE)
-        cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
-        agent_tracer.info(f"\\n[EXECUTING NATIVE COMMAND]:\\n{cmd_str}\\n")
-        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
-        if call_name == "sdlc_advance_state":
-            output = sdlc_advance_state(**call_args)
-        elif call_name == "sdlc_search_codebase":
-            output = sdlc_search_codebase(**call_args)
-        elif call_name == "sdlc_store_memory":
-            output = sdlc_store_memory(**call_args)
-        elif call_name == "sdlc_web_search":
-            output = sdlc_web_search(**call_args)
-        else:
-            output = f"SYSTEM ERROR: Unhandled SDLC tool '{call_name}'"
-            global_logger.warning(f"❌ Unhandled SDLC tool '{call_name}'")
-            
-        agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
-        
-        return {
-            "role": "tool",
-            "tool_call_id": call.id,
-            "name": call_name,
-            "content": output
-        }, session_cwd
-    elif hasattr(workflow, "process_tool_call"):
-        return workflow.process_tool_call(call, session_cwd, cli_timeout, log_prefix, agent_tracer)
+    
+    call_args_list = []
+    if isinstance(call.function.arguments, str):
+        import json
+        decoder = json.JSONDecoder()
+        s = call.function.arguments
+        idx = 0
+        while idx < len(s):
+            s_sub = s[idx:].strip()
+            if not s_sub:
+                break
+            try:
+                obj, parsed_len = decoder.raw_decode(s_sub)
+                call_args_list.append(obj)
+                stripped_len = len(s[idx:]) - len(s_sub)
+                idx += stripped_len + parsed_len
+            except json.JSONDecodeError as e:
+                global_logger.warning(f"Failed to fully decode JSON args: {e}")
+                if not call_args_list:
+                    call_args_list = [json.loads(s)]
+                break
     else:
-        output = (
-            f"SYSTEM ERROR: Tool '{call_name}' is not available in this context. "
-            "Do not attempt to call this tool again. "
-            "You must strictly use one of the explicitly provided native tools: "
-            "['run_cli_command', 'sdlc_advance_state', 'sdlc_search_codebase', 'sdlc_store_memory']."
-        )
-        global_logger.warning(f"❌ Hallucination Detected: Unknown tool '{call_name}'")
-        agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
+        call_args_list = [call.function.arguments]
+
+    combined_output = ""
+    for i, call_args in enumerate(call_args_list):
+        if i > 0:
+            combined_output += "\n---\n"
+            
+        import copy
+        sub_call = copy.copy(call)
+        sub_call.function.arguments = call_args
         
-        return {
-            "role": "tool",
-            "tool_call_id": call.id,
-            "name": call_name,
-            "content": output
-        }, session_cwd
+        if call_name.startswith("sdlc_"):
+            cmd_name = call_name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
+            cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call_args.items()])
+            
+            prefix = f"{log_prefix} " + typer.style("Native CLI:", fg=typer.colors.WHITE)
+            cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
+            agent_tracer.info(f"\\n[EXECUTING NATIVE COMMAND]:\\n{cmd_str}\\n")
+            global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
+            if call_name == "sdlc_advance_state":
+                output = sdlc_advance_state(**call_args)
+            elif call_name == "sdlc_search_codebase":
+                output = sdlc_search_codebase(**call_args)
+            elif call_name == "sdlc_store_memory":
+                output = sdlc_store_memory(**call_args)
+            elif call_name == "sdlc_web_search":
+                output = sdlc_web_search(**call_args)
+            elif call_name == "sdlc_query_traces":
+                output = sdlc_query_traces(**call_args)
+            elif call_name == "sdlc_execute_sql":
+                output = sdlc_execute_sql(**call_args)
+            else:
+                output = f"SYSTEM ERROR: Unhandled SDLC tool '{call_name}'"
+                global_logger.warning(f"❌ Unhandled SDLC tool '{call_name}'")
+                
+            agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
+            combined_output += output
+            
+        elif hasattr(workflow, "process_tool_call"):
+            result = workflow.process_tool_call(sub_call, session_cwd, cli_timeout, log_prefix, agent_tracer)
+            if isinstance(result, tuple) and len(result) == 2:
+                part = result[0]
+                session_cwd = result[1]
+            else:
+                part = result
+                
+            if isinstance(part, dict):
+                output = part.get("content", "")
+            else:
+                output = str(part)
+                
+            combined_output += output
+            
+        else:
+            output = (
+                f"SYSTEM ERROR: Tool '{call_name}' is not available in this context. "
+                "Do not attempt to call this tool again. "
+                "You must strictly use one of the explicitly provided native tools: "
+                "['run_cli_command', 'sdlc_advance_state', 'sdlc_search_codebase', 'sdlc_store_memory']."
+            )
+            global_logger.warning(f"❌ Hallucination Detected: Unknown tool '{call_name}'")
+            agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
+            combined_output += output
+            
+    return {
+        "role": "tool",
+        "tool_call_id": call.id,
+        "name": call_name,
+        "content": combined_output
+    }, session_cwd
 
 def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
     """Executes the subagent directly using the genai SDK."""
@@ -449,15 +550,16 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     models_config = config_data.get("models", {})
     agent_config = models_config.get(agent_name, {})
     target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
+    provider = agent_config.get("provider", "vllm")
     target_temp = float(agent_config.get("temperature", 0.0))
     agent_max_iterations = int(agent_config.get("max_iterations", 25))
-    target_max_tokens = int(config_data.get("generation_max_tokens", 24000))
-    max_model_len = int(config_data.get("max_model_len", 65536))
+    target_max_tokens = int(agent_config.get("generation_max_tokens", config_data.get("generation_max_tokens", 24000)))
+    max_model_len = int(agent_config.get("max_model_len", config_data.get("max_model_len", 65536)))
     prune_token_limit = max_model_len - target_max_tokens - 1000
     if prune_token_limit < 4000:
         prune_token_limit = 4000
 
-    client = _setup_client(config_data, system_instruction, target_temp)
+    client = _setup_client(config_data, system_instruction, target_temp, provider=provider)
     tools_schema = _get_tools_schema(workflow)
     
     sessions_root = config_data.get("sessions_root")
@@ -492,7 +594,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
         workdir_match = re.search(r"\*Workdir\*:\s*([^\n]+)", prompt)
         session_cwd = Path(workdir_match.group(1).strip()).resolve() if workdir_match else Path.cwd().resolve()
 
-        if not resumed:
+        if not resumed and agent_name != "dreamer":
             prompt += _get_tree_prompt(session_cwd)
 
         agent_tracer.info(f"=== INITIAL PROMPT ===\n{prompt}\n")

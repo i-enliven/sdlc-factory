@@ -127,9 +127,18 @@ def do_search_codebase(query: str, limit: int = 3) -> list:
 
 def do_store_memory(agent: str, task_context: str, resolution: str) -> str:
     conn = get_db_connection()
+    target_embedding = get_embedding(resolution)
+    
     with conn.cursor() as cur:
+        cur.execute("SELECT resolution, embedding <=> %s::vector AS distance FROM agent_memories WHERE agent_role = %s ORDER BY distance ASC LIMIT 1", (target_embedding, agent))
+        closest_match = cur.fetchone()
+        
+        if closest_match and closest_match[1] < 0.08:
+            conn.close()
+            return f"[{agent} MEMORY STORED]: Memory insertion skipped. A semantically identical heuristic already exists in the vector space (Distance: {closest_match[1]:.4f})."
+            
         cur.execute("INSERT INTO agent_memories (agent_role, task_context, resolution, embedding) VALUES (%s, %s, %s, %s)", 
-                   (agent, task_context, resolution, get_embedding(resolution)))
+                   (agent, task_context, resolution, target_embedding))
     conn.commit()
     conn.close()
     return f"[{agent} MEMORY STORED]: Embedded dimension coordinates written to DB natively."

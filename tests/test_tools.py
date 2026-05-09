@@ -3,7 +3,8 @@ import json
 import subprocess
 from sdlc_factory.tools import (
     sdlc_query_state, sdlc_context,
-    sdlc_advance_state, sdlc_search_codebase, sdlc_store_memory
+    sdlc_advance_state, sdlc_search_codebase, sdlc_store_memory,
+    sdlc_web_search
 )
 def test_sdlc_query_state_blocked(mocker):
     mocker.patch("sdlc_factory.tools.get_blocked_tasks", return_value=["task1"])
@@ -60,4 +61,22 @@ def test_sdlc_store_memory(mocker):
 def test_sdlc_store_memory_exception(mocker):
     mocker.patch("sdlc_factory.tools.do_store_memory", side_effect=Exception("kaboom"))
     res = json.loads(sdlc_store_memory("coder", "ctx", "res"))
+    assert res["status"] == "error"
+
+def test_sdlc_web_search(mocker):
+    class MockResponse:
+        def read(self):
+            return b'{"results": [{"title": "t1", "url": "u1", "content": "c1"}]}'
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc_val, exc_tb): pass
+        
+    mocker.patch("urllib.request.urlopen", return_value=MockResponse())
+    res = json.loads(sdlc_web_search("test query"))
+    assert res["status"] == "success"
+    assert len(res["results"]) == 1
+    assert res["results"][0]["title"] == "t1"
+
+def test_sdlc_web_search_exception(mocker):
+    mocker.patch("urllib.request.urlopen", side_effect=Exception("kaboom"))
+    res = json.loads(sdlc_web_search("test query"))
     assert res["status"] == "error"

@@ -137,6 +137,12 @@ def store_memory(agent: str = typer.Option(...), task_context: str = typer.Optio
     except Exception as e:
         abort(f"RAG Persistence Failure: {e}")
 
+@app.command(name="web-search")
+def web_search(query: str = typer.Option(...), domain: str = typer.Option(None)):
+    """Searches the web via SearxNG."""
+    from sdlc_factory.tools import sdlc_web_search
+    print(sdlc_web_search(query, domain))
+
 @app.command()
 def heartbeat(resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
     """Executes a single pulse of the SDLC Factory autonomous heartbeat."""

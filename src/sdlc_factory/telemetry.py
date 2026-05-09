@@ -3,7 +3,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource
-from openinference.instrumentation.google_genai import GoogleGenAIInstrumentor
+from openinference.instrumentation.openai import OpenAIInstrumentor
 from sdlc_factory.utils import global_logger
 
 _TELEMETRY_INITIALIZED = False
@@ -42,8 +42,8 @@ def setup_telemetry(config_data: dict) -> None:
         processor = SimpleSpanProcessor(OTLPSpanExporter(endpoint=tracing_endpoint, insecure=True))
         tracer_provider.add_span_processor(processor)
         
-        GoogleGenAIInstrumentor().instrument(tracer_provider=tracer_provider)
-        global_logger.info("📡 Google GenAI instrumentation applied successfully.")
+        OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+        global_logger.info("📡 OpenAI instrumentation applied successfully.")
         
     except Exception as e:
         global_logger.error(f"⚠️ Failed to initialize tracing: {e}. Falling back to un-instrumented execution.")

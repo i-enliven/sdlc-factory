@@ -14,7 +14,7 @@ from sdlc_factory.workflows import get_workflow
 def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
     """Executes one pass of the pipeline. Returns True if a task was processed."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    global_logger.debug(f"⏱️  Pulse Executed at {timestamp}")
+    global_logger.info(f"⏱️  Pulse Executed at {timestamp}")
 
     # 1. The Reasoner's Domain (Highest Priority)
     blocked_tasks = get_blocked_tasks()

@@ -14,23 +14,25 @@ def get_db_connection():
     return conn
 
 def get_embedding(text: str) -> list[float]:
-    """Generates embeddings using Gemini's native API."""
-    from google import genai
-    
+    """Generates embeddings using vLLM/OpenAI API."""
+    from openai import OpenAI
+    import os
+
     config = get_config()
-    api_key = config.get("vertex_api_key") or config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
-    
-    if not api_key:
-        raise Exception("Gemini/Vertex API key is missing.")
-        
-    client = genai.Client(api_key=api_key, http_options={'timeout': 30000})
-    
+    api_key = config.get("vertex_api_key") or config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
+    # Use an embedding-specific base_url if provided, otherwise default to Google's OpenAI-compatible endpoint.
+    # This prevents embedding requests from hitting the vLLM text-generation node.
+    base_url = config.get("embedding_base_url", "https://generativelanguage.googleapis.com/v1beta/openai/")
+
+    api_timeout = float(config.get("api_timeout", 600.0))
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=api_timeout)
+
     try:
-        response = client.models.embed_content(
-            model='gemini-embedding-001',
-            contents=text,
-            config={'output_dimensionality': 768}
+        response = client.embeddings.create(
+            model='gemini-embedding-001', # Change this if vLLM uses a different embedding model
+            input=text,
+            dimensions=768
         )
-        return response.embeddings[0].values
+        return response.data[0].embedding
     except Exception as e:
-        raise Exception(f"Gemini Embedding failed: {e}")
+        raise Exception(f"Embedding failed: {e}")

@@ -24,6 +24,10 @@ You should interact with the factory primarily through your assigned function to
 **Mandate:** You MUST prepend the exact tech stack to your `task_context` (e.g., `[Python/uv] Database pool exhausted` or `[Go/CLI] Binary panic`) to prevent cross-polluting the global memory vector for different architectures.
 **Returns:** A success confirmation bridging the vector natively.
 
+### D. Web Search (`sdlc_web_search`)
+**Use Case:** Executed when you need to find external documentation, API references, or general coding help from the public internet using the internal SearxNG engine.
+**Returns:** A formatted JSON string containing the top search results including titles, URLs, and relevant content snippets.
+
 ## 3. Secondary CLI Commands
 If function tools are unavailable, you may use the standard CLI via `run_cli_command`.
 

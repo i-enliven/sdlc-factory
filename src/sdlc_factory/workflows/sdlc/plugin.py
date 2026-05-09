@@ -7,7 +7,6 @@ from typing import Optional, Dict, Any, List
 from sdlc_factory.workflows.base import WorkflowPlugin
 import re
 import logging
-from google.genai import types
 from .tools import run_cli_command
 from sdlc_factory.utils import global_logger, read_json, write_json, get_workspace
 
@@ -41,12 +40,28 @@ class SdlcWorkflow(WorkflowPlugin):
         return ["planner", "architect", "tester", "coder", "deployer", "monitor"]
 
     @property
-    def tools(self) -> List[Any]:
-        return [run_cli_command]
+    def tools(self) -> List[Dict[str, Any]]:
+        return [{
+            "type": "function",
+            "function": {
+                "name": "run_cli_command",
+                "description": "Executes a shell command on the host. Always use specific tools before using this.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "cwd": {"type": "string"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        }]
 
-    def handle_run_cli_command(self, call: Any, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> tuple[Any, Path]:
-        cmd = call.args.get("command", "").strip()
-        req_cwd = call.args.get("cwd", None)
+    def handle_run_cli_command(self, call: Any, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> tuple[Dict[str, Any], Path]:
+        import json
+        args = json.loads(call.function.arguments) if isinstance(call.function.arguments, str) else call.function.arguments
+        cmd = args.get("command", "").strip()
+        req_cwd = args.get("cwd", None)
         
         if req_cwd:
             exec_cwd = str(Path(session_cwd).joinpath(req_cwd).resolve())
@@ -74,10 +89,12 @@ class SdlcWorkflow(WorkflowPlugin):
             
         agent_tracer.info(f"[OUTPUT]:\n{output}\n")
         
-        return types.Part.from_function_response(
-            name=call.name,
-            response={"result": output}
-        ), session_cwd
+        return {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "name": call.function.name,
+            "content": output
+        }, session_cwd
 
     def get_pending_task(self, agent: str, workspace_root: Path) -> Optional[dict]:
         phase_map = {

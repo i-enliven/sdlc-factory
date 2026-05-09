@@ -167,7 +167,8 @@ def do_advance_state(task_id: str, to: str, regression: bool = False) -> str:
 
     # --- REGRESSION CLEANUP ---
     regression_file = ws / "handoff" / "regression_report.json"
-    if regression_file.exists():
+    is_regression_recovery = regression_file.exists()
+    if is_regression_recovery:
         regression_file.unlink()
         global_logger.info(f"🧹 [CLEANUP] Resolved regression. Removed report.", extra={"color": typer.colors.YELLOW})
     # --------------------------
@@ -182,7 +183,8 @@ def do_advance_state(task_id: str, to: str, regression: bool = False) -> str:
         return "Consolidated workspace (handled by plugin hook)"
 
     state["phase"] = to
-    state["retry_count"] = 0
+    if not is_regression_recovery:
+        state["retry_count"] = 0
     write_json(state_file, state)
     global_logger.info(f"[SUCCESS] Schema validated. State advanced from {current_phase} to {to}", extra={"color": typer.colors.GREEN})
     return f"Advanced from {current_phase} to {to}"

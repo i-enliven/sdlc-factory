@@ -1,5 +1,8 @@
 import json
 from typing import Optional
+import urllib.request
+import urllib.parse
+from sdlc_factory.utils import get_config
 
 from sdlc_factory.state import get_pending_task, get_blocked_tasks, do_advance_state
 from sdlc_factory.memory import build_context, do_search_codebase, do_store_memory
@@ -42,5 +45,38 @@ def sdlc_store_memory(agent: str, task_context: str, resolution: str) -> str:
     """Invokes 'sdlc-factory store-memory'. Stores an explicitly vectorized insight securely into Postgres."""
     try:
         return json.dumps({"status": "success", "message": do_store_memory(agent, task_context, resolution)})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+def sdlc_web_search(query: str, domain: Optional[str] = None) -> str:
+    """Invokes 'sdlc-factory web-search'. Performs a web search using the internal SearxNG instance."""
+    try:
+        config = get_config()
+        base_url = config.get("searxng_url", "http://sagittarius-a.mara-balance.ts.net:8080")
+        
+        search_query = query
+        if domain:
+            search_query += f" site:{domain}"
+            
+        params = urllib.parse.urlencode({
+            'q': search_query,
+            'format': 'json'
+        })
+        url = f"{base_url.rstrip('/')}/search?{params}"
+        
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30.0) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            
+        results = data.get("results", [])
+        top_results = []
+        for r in results[:5]:
+            top_results.append({
+                "title": r.get("title"),
+                "url": r.get("url"),
+                "content": r.get("content")
+            })
+            
+        return json.dumps({"status": "success", "results": top_results}, indent=2) if top_results else json.dumps({"status": "no_results"})
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})

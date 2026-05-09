@@ -7,8 +7,7 @@ from typing import Optional, Tuple, Any, List
 import typer
 import time
 from datetime import datetime
-from google import genai
-from google.genai import types
+from openai import OpenAI
 import uuid
 import re
 import hashlib
@@ -20,6 +19,7 @@ from sdlc_factory.utils import get_config, abort, global_logger, get_workspace, 
 from sdlc_factory.tools import (
     sdlc_advance_state,
     sdlc_search_codebase,
+    sdlc_web_search,
     sdlc_store_memory
 )
 
@@ -52,47 +52,143 @@ def _build_system_instruction(agent_name: str, agents_root: Path, exclude_files:
     return system_instruction
 
 
-def _setup_client(config_data: dict, system_instruction: str, target_temp: float) -> genai.Client:
-    vertex_api_key = config_data.get("vertex_api_key")
-    if vertex_api_key:
-        client = genai.Client(vertexai=True, api_key=vertex_api_key, http_options={'timeout': 300000})
-    else:
-        api_key = config_data.get("gemini_api_key")
-        client = genai.Client(api_key=api_key, http_options={'timeout': 300000}) if api_key else genai.Client(http_options={'timeout': 300000})        
-    return client
+def _setup_client(config_data: dict, system_instruction: str, target_temp: float) -> OpenAI:
+    import os
+    base_url = config_data.get("base_url", "http://sagittarius-a.mara-balance.ts.net:8100/v1")
+    api_key = config_data.get("vertex_api_key") or config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
+    api_timeout = float(config_data.get("api_timeout", 600.0))
+    return OpenAI(base_url=base_url, api_key=api_key, timeout=api_timeout)
 
-def _get_genai_config(system_instruction: str, target_temp: float, workflow) -> types.GenerateContentConfig:
-    tools_list = [
-        sdlc_advance_state,
-        sdlc_search_codebase,
-        sdlc_store_memory
+def _get_tools_schema(workflow) -> list[dict]:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "sdlc_advance_state",
+                "description": "Invokes 'sdlc-factory advance-state'. Advances the SDLC pipeline phase natively.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string"},
+                        "to": {"type": "string"},
+                        "regression": {"type": "boolean"}
+                    },
+                    "required": ["task_id", "to"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sdlc_search_codebase",
+                "description": "Invokes 'sdlc-factory search-codebase'. Finds relevant codebase file embeddings via pgvector.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sdlc_store_memory",
+                "description": "Invokes 'sdlc-factory store-memory'. Stores an explicitly vectorized insight securely into Postgres.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agent": {"type": "string"},
+                        "task_context": {"type": "string"},
+                        "resolution": {"type": "string"}
+                    },
+                    "required": ["agent", "task_context", "resolution"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sdlc_web_search",
+                "description": "Invokes 'sdlc-factory web-search'. Performs a web search using the internal SearxNG instance.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query."},
+                        "domain": {"type": "string", "description": "Optional domain to restrict the search to."}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
     ]
     if hasattr(workflow, "tools") and workflow.tools:
-        tools_list.extend(workflow.tools)
-        
-    return types.GenerateContentConfig(
-        system_instruction=system_instruction,
-        temperature=target_temp,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        tools=tools_list
-    )
+        tools.extend(workflow.tools)
+    return tools
 
-def _save_session(chat, session_file: Path):
+def _get_role(m) -> str:
+    if isinstance(m, dict):
+        return m.get("role", "")
+    return getattr(m, "role", "")
+
+def _prune_messages(messages: list, max_messages: int) -> list:
+    if max_messages <= 0 or len(messages) <= max_messages + 1:
+        return messages
+        
+    system_msgs = [m for m in messages if _get_role(m) == "system"]
+    other_msgs = [m for m in messages if _get_role(m) != "system"]
+    
+    if len(other_msgs) <= max_messages:
+        return messages
+        
+    slice_start = len(other_msgs) - max_messages
+    
+    while slice_start < len(other_msgs):
+        if _get_role(other_msgs[slice_start]) == "tool":
+            slice_start += 1
+        else:
+            break
+            
+    pruned_other = other_msgs[slice_start:]
+    
+    if other_msgs:
+        first_msg = other_msgs[0]
+        if _get_role(first_msg) == "user" and first_msg not in pruned_other:
+            pruned_other.insert(0, first_msg)
+            
+    pruned = system_msgs + pruned_other
+    if len(pruned) < len(messages):
+        global_logger.info(f"✂️ Pruned conversation history from {len(messages)} to {len(pruned)} messages to conserve tokens.", extra={"color": typer.colors.CYAN})
+    return pruned
+
+def _save_session(messages: list[dict], session_file: Path):
     try:
-        hist = chat.get_history()
-        if hist:
-            dumped = [c.model_dump(mode="json") for c in hist]
-            session_file.write_text(json.dumps(dumped, indent=2), encoding="utf-8")
+        dumped = []
+        for m in messages:
+            if hasattr(m, "model_dump"):
+                dumped.append(m.model_dump(mode="json"))
+            else:
+                dumped.append(m)
+        session_file.write_text(json.dumps(dumped, indent=2), encoding="utf-8")
     except Exception as e:
         global_logger.warning(f"Failed to serialize session history: {e}")
 
-def _send_with_retry(chat, session_id: str, session_file: Path, payload, max_retries=7, base_delay=5):
+def _send_with_retry(client, messages, tools, target_model, target_temp, session_id: str, session_file: Path, max_retries=20, base_delay=5):
     time.sleep(0.5)
     for attempt in range(max_retries):
         try:
             with using_session(session_id):
-                res = chat.send_message(payload)
-                _save_session(chat, session_file)
+                res = client.chat.completions.create(
+                    model=target_model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=target_temp
+                )
+                assistant_msg = res.choices[0].message
+                messages.append(assistant_msg)
+                _save_session(messages, session_file)
                 return res
         except Exception as e:
             error_str = str(e).lower()
@@ -115,7 +211,6 @@ def _send_with_retry(chat, session_id: str, session_file: Path, payload, max_ret
                 
                 time.sleep(delay)
                 continue
-            
             raise e
 
 def _handle_human_pause(tool_results=None) -> Any:
@@ -129,10 +224,10 @@ def _handle_human_pause(tool_results=None) -> Any:
         if user_msg:
             if tool_results:
                 last_part = tool_results[-1]
-                orig_result = last_part.function_response.response.get("result", "")
-                override_text = f"### ⚠️ URGENT HUMAN OVERRIDE INSTRUCTION ⚠️\nThe human operator has intercepted this execution and provided the following direct instruction you MUST follow:\n\n{user_msg}\n\n---\nOriginal Tool Output:\n{orig_result}"
-                last_part.function_response.response["result"] = override_text
-                global_logger.info(f"💉 Injected human instruction into '{last_part.function_response.name}' response.", extra={"color": typer.colors.GREEN})
+                orig_result = last_part.get("content", "")
+                override_text = f"### ⚠️ URGENT HUMAN OVERRIDE INSTRUCTION ⚠️\\nThe human operator has intercepted this execution and provided the following direct instruction you MUST follow:\\n\\n{user_msg}\\n\\n---\\nOriginal Tool Output:\\n{orig_result}"
+                last_part["content"] = override_text
+                global_logger.info(f"💉 Injected human instruction into '{last_part.get('name', 'tool')}' response.", extra={"color": typer.colors.GREEN})
                 return True
             else:
                 global_logger.info("💉 Injected human instruction directly to agent.", extra={"color": typer.colors.GREEN})
@@ -191,47 +286,55 @@ def _get_tree_prompt(session_cwd: Path) -> str:
     except Exception as e:
         prompt_addition += f"\n\n## WORKSPACE DIRECTORY TREE\nError fetching tree: {e}\n\n"
     return prompt_addition
-def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger, workflow) -> Tuple[types.Part, Path]:
-    if call.name.startswith("sdlc_"):
-        cmd_name = call.name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
-        cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call.args.items()])
+def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger, workflow) -> Tuple[dict, Path]:
+    call_name = call.function.name
+    call_args = json.loads(call.function.arguments) if isinstance(call.function.arguments, str) else call.function.arguments
+    if call_name.startswith("sdlc_"):
+        cmd_name = call_name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
+        cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call_args.items()])
         
         prefix = f"{log_prefix} " + typer.style("Native CLI:", fg=typer.colors.WHITE)
         cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
-        agent_tracer.info(f"\n[EXECUTING NATIVE COMMAND]:\n{cmd_str}\n")
+        agent_tracer.info(f"\\n[EXECUTING NATIVE COMMAND]:\\n{cmd_str}\\n")
         global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
-        if call.name == "sdlc_advance_state":
-            output = sdlc_advance_state(**call.args)
-        elif call.name == "sdlc_search_codebase":
-            output = sdlc_search_codebase(**call.args)
-        elif call.name == "sdlc_store_memory":
-            output = sdlc_store_memory(**call.args)
+        if call_name == "sdlc_advance_state":
+            output = sdlc_advance_state(**call_args)
+        elif call_name == "sdlc_search_codebase":
+            output = sdlc_search_codebase(**call_args)
+        elif call_name == "sdlc_store_memory":
+            output = sdlc_store_memory(**call_args)
+        elif call_name == "sdlc_web_search":
+            output = sdlc_web_search(**call_args)
         else:
-            output = f"SYSTEM ERROR: Unhandled SDLC tool '{call.name}'"
-            global_logger.warning(f"❌ Unhandled SDLC tool '{call.name}'")
+            output = f"SYSTEM ERROR: Unhandled SDLC tool '{call_name}'"
+            global_logger.warning(f"❌ Unhandled SDLC tool '{call_name}'")
             
-        agent_tracer.info(f"[OUTPUT]:\n{output}\n")
+        agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
         
-        return types.Part.from_function_response(
-            name=call.name,
-            response={"result": output}
-        ), session_cwd
+        return {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "name": call_name,
+            "content": output
+        }, session_cwd
     elif hasattr(workflow, "process_tool_call"):
         return workflow.process_tool_call(call, session_cwd, cli_timeout, log_prefix, agent_tracer)
     else:
         output = (
-            f"SYSTEM ERROR: Tool '{call.name}' is not available in this context. "
+            f"SYSTEM ERROR: Tool '{call_name}' is not available in this context. "
             "Do not attempt to call this tool again. "
             "You must strictly use one of the explicitly provided native tools: "
             "['run_cli_command', 'sdlc_advance_state', 'sdlc_search_codebase', 'sdlc_store_memory']."
         )
-        global_logger.warning(f"❌ Hallucination Detected: Unknown tool '{call.name}'")
-        agent_tracer.info(f"[OUTPUT]:\n{output}\n")
+        global_logger.warning(f"❌ Hallucination Detected: Unknown tool '{call_name}'")
+        agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
         
-        return types.Part.from_function_response(
-            name=call.name,
-            response={"result": output}
-        ), session_cwd
+        return {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "name": call_name,
+            "content": output
+        }, session_cwd
 
 def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
     """Executes the subagent directly using the genai SDK."""
@@ -262,9 +365,10 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     agent_max_iterations = int(agent_config.get("max_iterations", 25))
     session_context_limit = int(config_data.get("session_context_limit", 2000000))
     warning_context_limit = session_context_limit * 0.5
+    max_history_messages = int(config_data.get("max_history_messages", 40))
 
     client = _setup_client(config_data, system_instruction, target_temp)
-    config = _get_genai_config(system_instruction, target_temp, workflow)
+    tools_schema = _get_tools_schema(workflow)
     
     sessions_root = config_data.get("sessions_root")
     if not sessions_root:
@@ -276,18 +380,18 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     if is_resume and not session_file.exists():
         abort(f"Cannot resume: Session file not found at {session_file}")
 
-    history = None
+    messages = [{"role": "system", "content": system_instruction}]
     resumed = False
     if session_file.exists():
         try:
             raw_data = json.loads(session_file.read_text(encoding="utf-8"))
-            history = [types.Content.model_validate(c) for c in raw_data]
+            messages = raw_data
             resumed = True
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = system_instruction
             global_logger.info(f"🔄 Resuming session from {session_file.name}", extra={"color": typer.colors.CYAN})
         except Exception as e:
             global_logger.warning(f"Failed to parse session file {session_file}: {e}")
-
-    chat = client.chats.create(model=target_model, config=config, history=history)
     
     global HUMAN_PAUSE_REQUESTED
     HUMAN_PAUSE_REQUESTED = False
@@ -306,11 +410,17 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             global_logger.info("⏸️  [SESSION RESUMED] Triggering Human Override prompt for instructions...", extra={"color": typer.colors.CYAN})
             user_msg = _handle_human_pause()
             if user_msg:
-                response = _send_with_retry(chat, session_id, session_file, user_msg)
+                messages.append({"role": "user", "content": user_msg})
+                messages = _prune_messages(messages, max_history_messages)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
             else:
-                response = _send_with_retry(chat, session_id, session_file, "SYSTEM: Session resumed. Please continue.")
+                messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
+                messages = _prune_messages(messages, max_history_messages)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
         else:
-            response = _send_with_retry(chat, session_id, session_file, prompt)
+            messages.append({"role": "user", "content": prompt})
+            messages = _prune_messages(messages, max_history_messages)
+            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
         
         iteration_count = 0
         historical_signatures = []
@@ -322,25 +432,25 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 abort("Agent hit the token limit without advancing the state. Halting factory daemon.")
                 
             agent_text = ""
-            if getattr(response, "candidates", None):
-                candidate = response.candidates[0]
-                if getattr(candidate, "content", None) and getattr(candidate.content, "parts", None):
-                    for part in candidate.content.parts:
-                        if getattr(part, "text", None):
-                            agent_text += part.text
+            if response and response.choices and response.choices[0].message.content:
+                agent_text = response.choices[0].message.content
 
             if agent_text:
                 agent_tracer.info(f"\n[AGENT THOUGHTS]\n{agent_text}\n")
             
-            if response.function_calls:
+            if response and response.choices and response.choices[0].message.tool_calls:
                 try:
-                    hist_size = len(json.dumps([c.model_dump(mode="json") for c in chat.get_history()]).encode("utf-8")) if chat.get_history() else 0
+                    dumped = []
+                    for m in messages:
+                        if hasattr(m, "model_dump"):
+                            dumped.append(m.model_dump(mode="json"))
+                        else:
+                            dumped.append(m)
+                    context_bytes = len(json.dumps(dumped).encode("utf-8"))
                 except Exception as e:
                     global_logger.warning(f"Failed to calculate history size for telemetry: {e}")
-                    hist_size = 0
-                context_bytes = len(system_instruction.encode("utf-8")) + hist_size
+                    context_bytes = len(system_instruction.encode("utf-8"))
                 context_size_str = format_size(context_bytes)
-                
                 if context_bytes > session_context_limit:
                     global_logger.error(f"🚨 OOM SAFEGUARD: Context size exceeded {format_size(session_context_limit)} ({context_size_str}). Aborting.", extra={"bold": True})
                     abort("Agent context size exceeded the safety threshold. Halting factory daemon.")
@@ -351,7 +461,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 log_prefix = f"[{iteration_count:03}/{agent_max_iterations:03} - {context_size_str}]"
                 
                 current_call_signature = json.dumps(
-                    [{"name": c.name, "args": dict(c.args or {})} for c in response.function_calls],
+                    [{"name": c.function.name, "args": c.function.arguments} for c in response.choices[0].message.tool_calls],
                     sort_keys=True
                 )
                 
@@ -374,21 +484,23 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     abort(f"Agent trapped in repetitive tool loop using pattern size {w}: {current_call_signature}")
 
                 tool_results = []
-                for i, call in enumerate(response.function_calls):
+                for i, call in enumerate(response.choices[0].message.tool_calls):
                     
                     if HUMAN_PAUSE_REQUESTED:
                         override = _handle_human_pause(tool_results)
                         if override:
-                            remaining_calls = response.function_calls[i:]
+                            remaining_calls = response.choices[0].message.tool_calls[i:]
                             for rem_idx, rem_call in enumerate(remaining_calls):
                                 dummy_text = "ABORTED BY HUMAN OVERRIDE IN PREVIOUS STEP"
                                 if isinstance(override, str) and rem_idx == 0:
                                     dummy_text = f"### ⚠️ URGENT HUMAN OVERRIDE INSTRUCTION ⚠️\nThe human operator has intercepted this execution and provided the following direct instruction you MUST follow:\n\n{override}\n\n(Note: This tool and subsequent parallel tools were aborted)"
                                 
-                                tool_results.append(types.Part.from_function_response(
-                                    name=rem_call.name,
-                                    response={"result": dummy_text}
-                                ))
+                                tool_results.append({
+                                    "role": "tool",
+                                    "tool_call_id": rem_call.id,
+                                    "name": rem_call.function.name,
+                                    "content": dummy_text
+                                })
                             break
                     
                     if warning_loop_detected:
@@ -399,12 +511,14 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                             "If you cannot resolve this, DO NOT force a success state. Instead, write an escalation report to 'issues/ISSUE-FATAL.md' "
                             "via the CLI and advance the state to BLOCKED. A 4th attempt of this exact sequence will trigger a hard system abort."
                         )
-                        global_logger.warning(f"⚠️ Injecting Repetition Intervention for '{call.name}'", extra={"color": typer.colors.YELLOW})
+                        global_logger.warning(f"⚠️ Injecting Repetition Intervention for '{call.function.name}'", extra={"color": typer.colors.YELLOW})
                         
-                        tool_results.append(types.Part.from_function_response(
-                            name=call.name,
-                            response={"result": output, "status": "blocked"}
-                        ))
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "name": call.function.name,
+                            "content": output
+                        })
                         continue
 
                     part, session_cwd = _process_tool_call(
@@ -412,22 +526,22 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     )
                     tool_results.append(part)
 
-                response = _send_with_retry(chat, session_id, session_file, tool_results)
+                messages.extend(tool_results)
+                messages = _prune_messages(messages, max_history_messages)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
             else:
                 if HUMAN_PAUSE_REQUESTED:
                     user_msg = _handle_human_pause()
                     if user_msg:
-                        response = _send_with_retry(chat, session_id, session_file, user_msg)
+                        messages.append({"role": "user", "content": user_msg})
+                        messages = _prune_messages(messages, max_history_messages)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, session_id, session_file)
                         continue
                 break
                 
         final_text = ""
-        if getattr(response, "candidates", None):
-            candidate = response.candidates[0]
-            if getattr(candidate, "content", None) and getattr(candidate.content, "parts", None):
-                for part in candidate.content.parts:
-                    if getattr(part, "text", None):
-                        final_text += part.text
+        if response and response.choices and response.choices[0].message.content:
+            final_text = response.choices[0].message.content
         return final_text.strip() if final_text.strip() else "Agent execution completed successfully via CLI tools."
 
     except Exception as e:

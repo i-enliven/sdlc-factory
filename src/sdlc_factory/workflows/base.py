@@ -69,29 +69,30 @@ class WorkflowPlugin(ABC):
         pass
     @property
     @abstractmethod
-    def tools(self) -> List[Any]:
+    def tools(self) -> List[Dict[str, Any]]:
         """Returns a list of workflow-specific tools for the agent."""
         pass
 
-    def process_tool_call(self, call: Any, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> Tuple[Any, Path]:
+    def process_tool_call(self, call: Any, session_cwd: Path, cli_timeout: int, log_prefix: str, agent_tracer: logging.Logger) -> Tuple[Dict[str, Any], Path]:
         """
         Processes a workflow-specific tool call by dynamically dispatching to `handle_<tool_name>`.
-        Returns a tuple of (tool_response_part, updated_session_cwd).
+        Returns a tuple of (tool_response_dict, updated_session_cwd).
         """
-        from google.genai import types
         from sdlc_factory.utils import global_logger
         
-        handler_name = f"handle_{call.name}"
+        handler_name = f"handle_{call.function.name}"
         handler = getattr(self, handler_name, None)
         
         if handler and callable(handler):
             return handler(call, session_cwd, cli_timeout, log_prefix, agent_tracer)
             
         # Fallback for unrecognized tool in this workflow
-        output = f"SYSTEM ERROR: Tool '{call.name}' is not handled by this workflow."
-        global_logger.warning(f"❌ Unhandled plugin tool '{call.name}'")
+        output = f"SYSTEM ERROR: Tool '{call.function.name}' is not handled by this workflow."
+        global_logger.warning(f"❌ Unhandled plugin tool '{call.function.name}'")
         agent_tracer.info(f"[OUTPUT]:\n{output}\n")
-        return types.Part.from_function_response(
-            name=call.name,
-            response={"result": output}
-        ), session_cwd
+        return {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "name": call.function.name,
+            "content": output
+        }, session_cwd

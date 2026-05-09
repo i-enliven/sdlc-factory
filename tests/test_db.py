@@ -7,7 +7,7 @@ def test_get_db_connection(mocker):
     mock_register = mocker.patch("sdlc_factory.db.register_vector")
 
     conn = get_db_connection()
-    mock_connect.assert_called_once_with("postgresql://user:pass@localhost:5432/db")
+    mock_connect.assert_called_once_with("postgresql://user:pass@localhost:5432/db", connect_timeout=5)
     mock_register.assert_called_once_with(mock_connect.return_value)
     assert conn == mock_connect.return_value
 

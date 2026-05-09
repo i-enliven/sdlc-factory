@@ -1,17 +1,31 @@
 import os
 import logging
 import psycopg
+import time
 from pgvector.psycopg import register_vector
-from sdlc_factory.utils import get_config, abort
+from sdlc_factory.utils import get_config, abort, global_logger
 
 def get_db_connection():
     config = get_config()
     conn_str = config.get("connection_string")
     if not conn_str:
         raise Exception("connection_string is empty in configuration.")
-    conn = psycopg.connect(conn_str)
-    register_vector(conn)
-    return conn
+    backoff_intervals = [5, 10, 20, 40, 80]
+    for idx, wait_time in enumerate(backoff_intervals):
+        try:
+            conn = psycopg.connect(conn_str, connect_timeout=5)
+            register_vector(conn)
+            return conn
+        except psycopg.OperationalError:
+            global_logger.warning(f"⚠️ PostgreSQL is unreachable. Retrying in {wait_time} seconds (Attempt {idx+1}/{len(backoff_intervals)})...")
+            time.sleep(wait_time)
+            
+    try:
+        conn = psycopg.connect(conn_str, connect_timeout=5)
+        register_vector(conn)
+        return conn
+    except psycopg.OperationalError as e:
+        raise Exception(f"Failed to connect to PostgreSQL after exponential backoff: {e}")
 
 def get_embedding(text: str) -> list[float]:
     """Generates embeddings using vLLM/OpenAI API."""

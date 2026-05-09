@@ -133,34 +133,52 @@ def _get_role(m) -> str:
         return m.get("role", "")
     return getattr(m, "role", "")
 
-def _prune_messages(messages: list, max_messages: int) -> list:
-    if max_messages <= 0 or len(messages) <= max_messages + 1:
+def _estimate_tokens(messages: list) -> int:
+    try:
+        dumped = []
+        for m in messages:
+            if hasattr(m, "model_dump"):
+                dumped.append(m.model_dump(mode="json"))
+            else:
+                dumped.append(m)
+        return len(json.dumps(dumped)) // 4
+    except Exception:
+        return 0
+
+def _prune_messages(messages: list, max_tokens: int) -> list:
+    if max_tokens <= 0 or len(messages) <= 1:
         return messages
         
     system_msgs = [m for m in messages if _get_role(m) == "system"]
     other_msgs = [m for m in messages if _get_role(m) != "system"]
     
-    if len(other_msgs) <= max_messages:
-        return messages
-        
-    slice_start = len(other_msgs) - max_messages
+    original_tokens = _estimate_tokens(messages)
     
-    while slice_start < len(other_msgs):
-        if _get_role(other_msgs[slice_start]) == "tool":
-            slice_start += 1
+    while other_msgs and _estimate_tokens(system_msgs + other_msgs) > max_tokens:
+        slice_start = 1
+        while slice_start < len(other_msgs):
+            if _get_role(other_msgs[slice_start]) == "tool":
+                slice_start += 1
+            else:
+                break
+        if slice_start >= len(other_msgs):
+            other_msgs = []
         else:
-            break
-            
-    pruned_other = other_msgs[slice_start:]
+            other_msgs = other_msgs[slice_start:]
     
-    if other_msgs:
-        first_msg = other_msgs[0]
-        if _get_role(first_msg) == "user" and first_msg not in pruned_other:
-            pruned_other.insert(0, first_msg)
+    if not other_msgs:
+        return system_msgs
             
-    pruned = system_msgs + pruned_other
+    original_other_msgs = [m for m in messages if _get_role(m) != "system"]
+    if original_other_msgs:
+        first_msg = original_other_msgs[0]
+        if _get_role(first_msg) == "user" and first_msg not in other_msgs:
+            other_msgs.insert(0, first_msg)
+            
+    pruned = system_msgs + other_msgs
     if len(pruned) < len(messages):
-        global_logger.info(f"✂️ Pruned conversation history from {len(messages)} to {len(pruned)} messages to conserve tokens.", extra={"color": typer.colors.CYAN})
+        new_tokens = _estimate_tokens(pruned)
+        global_logger.info(f"✂️ Pruned conversation history from {len(messages)} to {len(pruned)} messages ({original_tokens} -> {new_tokens} estimated tokens) to conserve tokens.", extra={"color": typer.colors.CYAN})
     return pruned
 
 def _save_session(messages: list[dict], session_file: Path):
@@ -418,10 +436,11 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
     target_temp = float(agent_config.get("temperature", 0.0))
     agent_max_iterations = int(agent_config.get("max_iterations", 25))
-    session_context_limit = int(config_data.get("session_context_limit", 2000000))
-    warning_context_limit = session_context_limit * 0.5
-    max_history_messages = int(config_data.get("max_history_messages", 40))
     target_max_tokens = int(config_data.get("generation_max_tokens", 24000))
+    max_model_len = int(config_data.get("max_model_len", 65536))
+    prune_token_limit = max_model_len - target_max_tokens - 1000
+    if prune_token_limit < 4000:
+        prune_token_limit = 4000
 
     client = _setup_client(config_data, system_instruction, target_temp)
     tools_schema = _get_tools_schema(workflow)
@@ -467,15 +486,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             user_msg = _handle_human_pause()
             if user_msg:
                 messages.append({"role": "user", "content": user_msg})
-                messages = _prune_messages(messages, max_history_messages)
+                messages = _prune_messages(messages, prune_token_limit)
                 response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:
                 messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
-                messages = _prune_messages(messages, max_history_messages)
+                messages = _prune_messages(messages, prune_token_limit)
                 response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
         else:
             messages.append({"role": "user", "content": prompt})
-            messages = _prune_messages(messages, max_history_messages)
+            messages = _prune_messages(messages, prune_token_limit)
             response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
         
         iteration_count = 0
@@ -495,23 +514,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 agent_tracer.info(f"\n[AGENT THOUGHTS]\n{agent_text}\n")
             
             if response and response.choices and response.choices[0].message.tool_calls:
-                try:
-                    dumped = []
-                    for m in messages:
-                        if hasattr(m, "model_dump"):
-                            dumped.append(m.model_dump(mode="json"))
-                        else:
-                            dumped.append(m)
-                    context_bytes = len(json.dumps(dumped).encode("utf-8"))
-                except Exception as e:
-                    global_logger.warning(f"Failed to calculate history size for telemetry: {e}")
-                    context_bytes = len(system_instruction.encode("utf-8"))
-                context_size_str = format_size(context_bytes)
-                if context_bytes > session_context_limit:
-                    global_logger.error(f"🚨 OOM SAFEGUARD: Context size exceeded {format_size(session_context_limit)} ({context_size_str}). Aborting.", extra={"bold": True})
-                    abort("Agent context size exceeded the safety threshold. Halting factory daemon.")
+                context_tokens = _estimate_tokens(messages)
+                if context_tokens == 0:
+                    context_tokens = len(system_instruction) // 4
+                context_size_str = f"{context_tokens}tk"
+                if context_tokens > max_model_len:
+                    global_logger.error(f"🚨 OOM SAFEGUARD: Context tokens exceeded {max_model_len} ({context_size_str}). Aborting.", extra={"bold": True})
+                    abort("Agent token limits exceeded the safety threshold. Halting factory daemon.")
                     
-                if context_bytes > warning_context_limit:
+                if context_tokens > prune_token_limit:
                     context_size_str = typer.style(context_size_str, fg=typer.colors.RED, bold=True)
                     
                 log_prefix = f"[{iteration_count:03}/{agent_max_iterations:03} - {context_size_str}]"
@@ -583,14 +594,14 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     tool_results.append(part)
 
                 messages.extend(tool_results)
-                messages = _prune_messages(messages, max_history_messages)
+                messages = _prune_messages(messages, prune_token_limit)
                 response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:
                 if HUMAN_PAUSE_REQUESTED:
                     user_msg = _handle_human_pause()
                     if user_msg:
                         messages.append({"role": "user", "content": user_msg})
-                        messages = _prune_messages(messages, max_history_messages)
+                        messages = _prune_messages(messages, prune_token_limit)
                         response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
                         continue
                 break

@@ -141,7 +141,8 @@ def _estimate_tokens(messages: list) -> int:
                 dumped.append(m.model_dump(mode="json"))
             else:
                 dumped.append(m)
-        return len(json.dumps(dumped)) // 4
+        # 1 token ~= 3 chars is a safer estimate for code / tool calls which are dense
+        return len(json.dumps(dumped)) // 3
     except Exception:
         return 0
 
@@ -154,26 +155,29 @@ def _prune_messages(messages: list, max_tokens: int) -> list:
     
     original_tokens = _estimate_tokens(messages)
     
+    # Identify the very first user message so we can preserve it
+    first_msg = None
+    if other_msgs and _get_role(other_msgs[0]) == "user":
+        first_msg = other_msgs[0]
+        
     while other_msgs and _estimate_tokens(system_msgs + other_msgs) > max_tokens:
-        slice_start = 1
-        while slice_start < len(other_msgs):
-            if _get_role(other_msgs[slice_start]) == "tool":
-                slice_start += 1
+        has_first = (other_msgs[0] == first_msg)
+        start_idx = 1 if has_first else 0
+        
+        if start_idx >= len(other_msgs):
+            break
+            
+        slice_end = start_idx + 1
+        while slice_end < len(other_msgs):
+            if _get_role(other_msgs[slice_end]) == "tool":
+                slice_end += 1
             else:
                 break
-        if slice_start >= len(other_msgs):
-            other_msgs = []
+                
+        if slice_end >= len(other_msgs):
+            other_msgs = [first_msg] if has_first else []
         else:
-            other_msgs = other_msgs[slice_start:]
-    
-    if not other_msgs:
-        return system_msgs
-            
-    original_other_msgs = [m for m in messages if _get_role(m) != "system"]
-    if original_other_msgs:
-        first_msg = original_other_msgs[0]
-        if _get_role(first_msg) == "user" and first_msg not in other_msgs:
-            other_msgs.insert(0, first_msg)
+            other_msgs = ([first_msg] if has_first else []) + other_msgs[slice_end:]
             
     pruned = system_msgs + other_msgs
     if len(pruned) < len(messages):

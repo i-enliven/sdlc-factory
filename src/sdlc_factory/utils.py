@@ -9,7 +9,7 @@ import typer
 global_logger = logging.getLogger("sdlc_factory")
 
 
-CONFIG_FILE = Path.home() / ".sdlc-factory.json"
+CONFIG_FILE = Path.home() / ".sdlc-factory" / "config.json"
 
 def format_size(size_bytes: int) -> str:
     """Formats a byte size into a human-readable string."""
@@ -49,7 +49,7 @@ def get_config() -> dict:
     return read_json(CONFIG_FILE)
 
 def setup_global_logger():
-    log_dir = Path.home() / ".gemini" / "antigravity" / "logs" / "sdlc-factory"
+    log_dir = Path.home() / ".sdlc-factory" / "logs"
     
     try:
         cfg = get_config()

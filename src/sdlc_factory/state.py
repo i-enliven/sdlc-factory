@@ -52,6 +52,28 @@ def validate_handoff(ws: Path, phase: str, workflow_name: str):
         raise ValueError(f"Required file '{contract['file']}' is missing from handoff directory.")
 
     payload_data = read_json(target_file)
+
+    if payload_data.get("status") == "rfc_requested":
+        if not (ws / "docs" / "RFC.md").exists():
+            err_msg = {
+                "status": "error",
+                "error_code": "MISSING_DELIVERABLE",
+                "file": contract["file"],
+                "message": "Validation failed: You requested an RFC but 'docs/RFC.md' was not found in the workspace."
+            }
+            raise ValueError(json.dumps(err_msg, indent=2))
+    else:
+        required_artifacts = contract.get("required_artifacts", [])
+        for artifact in required_artifacts:
+            artifact_path = ws / artifact
+            if not artifact_path.exists():
+                err_msg = {
+                    "status": "error",
+                    "error_code": "MISSING_DELIVERABLE",
+                    "file": contract["file"],
+                    "message": f"Validation failed: Required deliverable '{artifact}' was not found in the workspace. You must create this file before advancing the state."
+                }
+                raise ValueError(json.dumps(err_msg, indent=2))
     try:
         validate(instance=payload_data, schema=contract["schema"])
     except ValidationError as e:

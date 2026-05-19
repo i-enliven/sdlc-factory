@@ -715,6 +715,21 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
 
                 messages.extend(tool_results)
                 messages = _prune_messages(messages, prune_token_limit)
+                should_yield = False
+                for part in tool_results:
+                    if part.get("name") == "sdlc_advance_state":
+                        try:
+                            res_data = json.loads(part.get("content", "{}"))
+                            if res_data.get("status") == "success":
+                                should_yield = True
+                                break
+                        except Exception:
+                            pass
+                
+                if should_yield:
+                    global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
+                    break
+
                 response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:
                 agent_content = response.choices[0].message.content if response and response.choices else ""

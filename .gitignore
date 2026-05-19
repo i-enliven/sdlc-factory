@@ -4,3 +4,4 @@ src/sdlc_factory.egg-info
 dist/
 build/
 __pycache__
+sdlc-factory.code-workspace

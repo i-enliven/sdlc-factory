@@ -42,3 +42,15 @@ def test_gather_modules(tmp_path, mock_config):
     int_ws = tmp_path / "test_workspace" / "t1-INTEGRATION"
     assert int_ws.exists()
     assert (int_ws / "docs" / "API_CONTRACTS.md").exists()
+
+def test_integration_transition_module_resolved(tmp_path, mock_config):
+    int_ws = tmp_path / "test_workspace" / "t1-INTEGRATION"
+    int_ws.mkdir(parents=True)
+    (int_ws / ".state").mkdir()
+    state = {"workflow": "sdlc", "phase": "QA_REVIEW"}
+    write_json(int_ws / ".state" / "current.json", state)
+    
+    wf = SdlcWorkflow()
+    wf.on_transition(int_ws, "t1-INTEGRATION", "QA_REVIEW", "MODULE_RESOLVED", state)
+    
+    assert state["phase"] == "INTEGRATION_TESTING"

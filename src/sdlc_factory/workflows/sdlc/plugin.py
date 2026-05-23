@@ -71,7 +71,7 @@ class SdlcWorkflow(WorkflowPlugin):
         agent_tracer.info(f"\n[EXECUTING COMMAND in {exec_cwd}]:\n{cmd}\n")
         prefix = f"{log_prefix} " + typer.style("Running CLI:", fg=typer.colors.WHITE)
         cmd_colored = typer.style(cmd, fg=typer.colors.GREEN)
-        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
+        global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 240})
         if cmd.startswith("cd "):
             target = re.split(r'&&|;', cmd)[0][3:].strip().strip("'\"")
             new_cwd = Path(exec_cwd).joinpath(target).resolve()
@@ -153,8 +153,13 @@ class SdlcWorkflow(WorkflowPlugin):
         if current_phase == "ARCHITECTURE" and to_phase == "AWAITING_MODULES":
             self._scatter_architecture(ws, task_id)
 
-        if to_phase == "MODULE_RESOLVED" and "-MOD-" in task_id:
-            self._gather_modules(task_id)
+        if to_phase == "MODULE_RESOLVED":
+            if "-MOD-" in task_id:
+                self._gather_modules(task_id)
+            elif task_id.endswith("-INTEGRATION"):
+                state["phase"] = "INTEGRATION_TESTING"
+                write_json(ws / ".state" / "current.json", state)
+                global_logger.info(f"🔄 [TRANSITION] Integration QA_REVIEW passed. Advancing to INTEGRATION_TESTING.", extra={"color": typer.colors.MAGENTA})
 
         if to_phase == "RESOLVED" and task_id.endswith("-INTEGRATION"):
             self._consolidate_integration(ws, task_id)

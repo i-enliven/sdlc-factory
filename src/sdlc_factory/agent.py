@@ -472,7 +472,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
             prefix = f"{log_prefix} " + typer.style("Native CLI:", fg=typer.colors.WHITE)
             cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
             agent_tracer.info(f"\\n[EXECUTING NATIVE COMMAND]:\\n{cmd_str}\\n")
-            global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 150})
+            global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 240})
             if call_name == "sdlc_advance_state":
                 output = sdlc_advance_state(**call_args)
             elif call_name == "sdlc_search_codebase":
@@ -726,9 +726,9 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         except Exception:
                             pass
                 
-                if should_yield:
-                    global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
-                    break
+                # if should_yield:
+                #     global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
+                #     break
 
                 response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
             else:

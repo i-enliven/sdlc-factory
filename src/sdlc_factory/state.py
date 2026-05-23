@@ -204,7 +204,8 @@ def do_advance_state(task_id: str, to: str, regression: bool = False) -> str:
     if not state_file.exists():
         return "Consolidated workspace (handled by plugin hook)"
 
-    state["phase"] = to
+    if state.get("phase") == current_phase:
+        state["phase"] = to
     if not is_regression_recovery:
         state["retry_count"] = 0
     write_json(state_file, state)

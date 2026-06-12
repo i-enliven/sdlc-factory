@@ -1,6 +1,6 @@
 # 🛠️ Skill: SDLC Factory (`sdlc-factory`)
 
-**CRITICAL EXECUTION NOTE:** You are provided with **Native Function Tools** (e.g., `sdlc_advance_state`, `run_cli_command`, `sdlc_search_codebase`). You MUST prefer these function tools over manual shell execution. They are faster, handle multi-line inputs better, and provide deterministic results.
+**CRITICAL TOOL-CALLING NOTE:** You are provided with **Native Function Tools** (e.g., `sdlc_advance_state`, `run_cli_command`). You MUST invoke these tools using ONLY the native JSON tool-calling schema. Never attempt to "call" a tool by writing Python code, markdown blocks, or pseudo-code in your textual response. (You are fully permitted to write Python scripts and source code *as the string arguments* inside valid JSON tool calls, but the tool invocation itself must be pure JSON.)
 
 ## 1. Overview
 The `sdlc-factory` is the deterministic state machine and context-isolation engine for the SDLC Factory autonomous development pipeline. You must use this system to fetch recovery context, discover codebase patterns, and advance the system state once your work is complete.

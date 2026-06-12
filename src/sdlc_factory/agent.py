@@ -470,14 +470,15 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
         if i > 0:
             combined_output += "\n---\n"
             
+        for k, v in list(call_args.items()):
+            if isinstance(v, str):
+                call_args[k] = v.strip().strip('"\'').strip()
+
         import copy
         sub_call = copy.copy(call)
         sub_call.function.arguments = call_args
         
         if call_name.startswith("sdlc_"):
-            for k, v in list(call_args.items()):
-                if isinstance(v, str):
-                    call_args[k] = v.strip('"\'')
             cmd_name = call_name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
             cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call_args.items()])
             
@@ -641,7 +642,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             if response and response.choices and response.choices[0].message.content:
                 agent_text = response.choices[0].message.content
 
-            if agent_text:
+            if agent_text and not no_stream:
                 agent_tracer.info(f"\n[AGENT THOUGHTS]\n{agent_text}\n")
             
             if response and response.choices and response.choices[0].message.tool_calls:
@@ -749,9 +750,13 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     agent_content = response.choices[0].message.content
                 if not agent_content.strip() and not (response and response.choices and getattr(response.choices[0].message, "tool_calls", None)):
                     empty_response_count += 1
-                    if empty_response_count <= 3:
-                        global_logger.warning("⚠️ Empty response detected from LLM (possible EOS bug). Prompting to continue...", extra={"color": typer.colors.YELLOW})
-                        messages.append({"role": "user", "content": "SYSTEM: You generated an empty response without making any tool calls. If you are stuck, please explain why. Otherwise, please continue executing tools to complete the task."})
+                    if empty_response_count <= 3 and not no_stream:
+                        global_logger.warning(f"⚠️ Empty response detected from LLM (possible EOS bug). Prompting to continue... (Attempt {empty_response_count}/3)", extra={"color": typer.colors.YELLOW})
+                        warning_msg = f"SYSTEM: You generated an empty response without making any tool calls. If you are stuck, please explain why. Otherwise, please continue executing tools to complete the task. (Attempt {empty_response_count} of 3)"
+                        if empty_response_count > 1 and messages and messages[-1].get("role") == "user" and "SYSTEM: You generated an empty response" in messages[-1].get("content", ""):
+                            messages[-1]["content"] = warning_msg
+                        else:
+                            messages.append({"role": "user", "content": warning_msg})
                         messages = _prune_messages(messages, prune_token_limit)
                         response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
                         continue

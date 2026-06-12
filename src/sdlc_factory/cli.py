@@ -144,14 +144,14 @@ def web_search(query: str = typer.Option(...), domain: str = typer.Option(None))
     print(sdlc_web_search(query, domain))
 
 @app.command()
-def heartbeat(resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
+def heartbeat(resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume"), no_stream: bool = typer.Option(False, "--no-stream", help="Disable streaming model thoughts")):
     """Executes a single pulse of the SDLC Factory autonomous heartbeat."""
-    executed = run_heartbeat_cycle(resume_session_id=resume)
+    executed = run_heartbeat_cycle(resume_session_id=resume, no_stream=no_stream)
     if not executed:
         global_logger.info("💤 No tasks found. Pipeline is idle.")
 
 @app.command()
-def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume"), workflow: str = typer.Option("sdlc", "--workflow", help="Workflow to use")):
+def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume"), workflow: str = typer.Option("sdlc", "--workflow", help="Workflow to use"), no_stream: bool = typer.Option(False, "--no-stream", help="Disable streaming model thoughts")):
     """Runs a specific agent in an ad-hoc loop for a given prompt, skipping the heartbeat playbook."""
     if not prompt and not resume:
         typer.secho("🤖 Enter your multi-line prompt. Press Ctrl+D (EOF) when finished:", fg=typer.colors.CYAN, bold=True)
@@ -166,7 +166,7 @@ def task(agent: str = typer.Option(...), prompt: str = typer.Option(None), resum
     if prompt:
         prompt = f"*Workdir*: {Path.cwd().resolve()}\n\n" + prompt
     
-    result = execute_agent(agent, prompt, exclude_files=["AGENTS.md", "PROTOCOL.md"], session_id=resume, is_resume=bool(resume), workflow_name=workflow)
+    result = execute_agent(agent, prompt, exclude_files=["AGENTS.md", "PROTOCOL.md"], session_id=resume, is_resume=bool(resume), workflow_name=workflow, no_stream=no_stream)
     typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.MAGENTA)
 
 
@@ -177,12 +177,12 @@ def chat(session_id: str = typer.Option(..., help="Session UUID to chat with")):
     run_chat_session(session_id)
 
 @app.command()
-def run(interval: int = typer.Option(30, help="Seconds to wait between idle heartbeat pulses"), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume")):
+def run(interval: int = typer.Option(30, help="Seconds to wait between idle heartbeat pulses"), resume: Optional[str] = typer.Option(None, "--resume", help="Session UUID to resume"), no_stream: bool = typer.Option(False, "--no-stream", help="Disable streaming model thoughts")):
     """Runs the SDLC Factory heartbeat continuously as a long-lived daemon."""
     global_logger.info(f"🚀 Starting continuous SDLC Factory heartbeat...", extra={"color": typer.colors.MAGENTA, "bold": True})
     try:
         while True:
-            executed = run_heartbeat_cycle(resume_session_id=resume)
+            executed = run_heartbeat_cycle(resume_session_id=resume, no_stream=no_stream)
             resume = None # Only resume the first cycle
             if executed:
                 time.sleep(2) 

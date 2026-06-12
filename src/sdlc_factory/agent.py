@@ -240,20 +240,29 @@ def _save_session(messages: list[dict], session_file: Path):
     except Exception as e:
         global_logger.warning(f"Failed to serialize session history: {e}")
 
-def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5):
+def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False):
     time.sleep(0.5)
     for attempt in range(max_retries):
         try:
             with using_session(session_id):
+                stream_kwargs = {"stream": True, "stream_options": {"include_usage": True}} if not no_stream else {"stream": False}
                 res = client.chat.completions.create(
                     model=target_model,
                     messages=messages,
                     tools=tools,
                     temperature=target_temp,
                     max_tokens=target_max_tokens,
-                    stream=True,
-                    stream_options={"include_usage": True}
+                    **stream_kwargs
                 )
+                
+                if no_stream:
+                    msg = res.choices[0].message
+                    assistant_msg_dict = msg.model_dump(exclude_unset=True)
+                    if "function_call" in assistant_msg_dict:
+                        del assistant_msg_dict["function_call"]
+                    messages.append(assistant_msg_dict)
+                    _save_session(messages, session_file)
+                    return res
                 
                 full_content = ""
                 tool_calls_dict = {}
@@ -466,6 +475,9 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
         sub_call.function.arguments = call_args
         
         if call_name.startswith("sdlc_"):
+            for k, v in list(call_args.items()):
+                if isinstance(v, str):
+                    call_args[k] = v.strip('"\'')
             cmd_name = call_name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
             cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call_args.items()])
             
@@ -525,7 +537,7 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
         "content": combined_output
     }, session_cwd
 
-def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc"):
+def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str]] = None, session_id: Optional[str] = None, is_resume: bool = False, workflow_name: str = "sdlc", no_stream: bool = False):
     """Executes the subagent directly using the genai SDK."""
     agent_tracer = logging.getLogger(f"sdlc_factory.agent.{agent_name}")
 
@@ -604,15 +616,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             if user_msg:
                 messages.append({"role": "user", "content": user_msg})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
             else:
                 messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
         else:
             messages.append({"role": "user", "content": prompt})
             messages = _prune_messages(messages, prune_token_limit)
-            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
         
         iteration_count = 0
         tool_execution_count = 0
@@ -730,16 +742,18 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 #     global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
                 #     break
 
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
             else:
-                agent_content = response.choices[0].message.content if response and response.choices else ""
-                if not agent_content.strip() and not (response and response.choices and response.choices[0].message.tool_calls):
+                agent_content = ""
+                if response and response.choices and getattr(response.choices[0].message, "content", None):
+                    agent_content = response.choices[0].message.content
+                if not agent_content.strip() and not (response and response.choices and getattr(response.choices[0].message, "tool_calls", None)):
                     empty_response_count += 1
                     if empty_response_count <= 3:
                         global_logger.warning("⚠️ Empty response detected from LLM (possible EOS bug). Prompting to continue...", extra={"color": typer.colors.YELLOW})
                         messages.append({"role": "user", "content": "SYSTEM: You generated an empty response without making any tool calls. If you are stuck, please explain why. Otherwise, please continue executing tools to complete the task."})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
                         continue
 
                 if HUMAN_PAUSE_REQUESTED:
@@ -747,7 +761,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     if user_msg:
                         messages.append({"role": "user", "content": user_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
                         continue
                 break
                 

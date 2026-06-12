@@ -13,7 +13,7 @@ from sdlc_factory.workflows import get_workflow
 
 _LAST_DREAMED_AGENT_INDEX = 0
 
-def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
+def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool = False) -> bool:
     """Executes one pass of the pipeline. Returns True if a task was processed."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     global_logger.info(f"⏱️  Pulse Executed at {timestamp}")
@@ -21,7 +21,7 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
     # 0. Background Synthesis Override
     if resume_session_id and resume_session_id.startswith("dreamer-"):
         global_logger.info(f"🚀 Resuming dreamer (Background Synthesis) | Session: {resume_session_id}", extra={"color": typer.colors.GREEN})
-        execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc")
+        execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc", no_stream=no_stream)
         return True
 
     # 1. The Reasoner's Domain (Highest Priority)
@@ -37,7 +37,7 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
             f"Payload: {json.dumps(task)}"
         )
         global_logger.info(f"🧠 Dispatching task to reasoner for {task['task_id']}...", extra={"color": typer.colors.GREEN})
-        # execute_agent("reasoner", prompt)
+        # execute_agent("reasoner", prompt, no_stream=no_stream)
         return True # Exit cycle to enforce strict cooldown
 
     # 2. Standard Queue for Worker Agents
@@ -101,7 +101,7 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
                 from sdlc_factory.utils import get_config
                 setup_telemetry(get_config())
                 global_logger.info(f"🚀 Dispatching {agent} (Workflow: {wf_name}) | Phase: {task['phase']} (Module: {task['assigned_module']}) | Session: {session_id}", extra={"color": typer.colors.GREEN})
-                result = execute_agent(agent, prompt, exclude_files=None, session_id=session_id, is_resume=is_resume, workflow_name=wf_name)
+                result = execute_agent(agent, prompt, exclude_files=None, session_id=session_id, is_resume=is_resume, workflow_name=wf_name, no_stream=no_stream)
                 typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.MAGENTA)
                 return True # Exit cycle to enforce strict cooldown
 
@@ -146,7 +146,7 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None) -> bool:
                 "3. ONCE YOU HAVE STORED A MEMORY, you MUST terminate your session. Do not keep querying. Terminate by replying with a final summary text and NO tool calls."
             )
             global_logger.info(f"🚀 Dispatching dreamer (Background Synthesis) | Target: {target_agent} | Session: {session_id}", extra={"color": typer.colors.GREEN})
-            execute_agent("dreamer", prompt, exclude_files=None, session_id=session_id, is_resume=False, workflow_name="sdlc")
+            execute_agent("dreamer", prompt, exclude_files=None, session_id=session_id, is_resume=False, workflow_name="sdlc", no_stream=no_stream)
             
             try:
                 dreamer_state_file.parent.mkdir(parents=True, exist_ok=True)

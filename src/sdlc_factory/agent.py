@@ -486,21 +486,25 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
             cmd_colored = typer.style(cmd_str, fg=typer.colors.GREEN)
             agent_tracer.info(f"\\n[EXECUTING NATIVE COMMAND]:\\n{cmd_str}\\n")
             global_logger.info(f"{prefix} {cmd_colored}", extra={"color": None, "truncate_console": 240})
-            if call_name == "sdlc_advance_state":
-                output = sdlc_advance_state(**call_args)
-            elif call_name == "sdlc_search_codebase":
-                output = sdlc_search_codebase(**call_args)
-            elif call_name == "sdlc_store_memory":
-                output = sdlc_store_memory(**call_args)
-            elif call_name == "sdlc_web_search":
-                output = sdlc_web_search(**call_args)
-            elif call_name == "sdlc_query_traces":
-                output = sdlc_query_traces(**call_args)
-            elif call_name == "sdlc_execute_sql":
-                output = sdlc_execute_sql(**call_args)
-            else:
-                output = f"SYSTEM ERROR: Unhandled SDLC tool '{call_name}'"
-                global_logger.warning(f"❌ Unhandled SDLC tool '{call_name}'")
+            try:
+                if call_name == "sdlc_advance_state":
+                    output = sdlc_advance_state(**call_args)
+                elif call_name == "sdlc_search_codebase":
+                    output = sdlc_search_codebase(**call_args)
+                elif call_name == "sdlc_store_memory":
+                    output = sdlc_store_memory(**call_args)
+                elif call_name == "sdlc_web_search":
+                    output = sdlc_web_search(**call_args)
+                elif call_name == "sdlc_query_traces":
+                    output = sdlc_query_traces(**call_args)
+                elif call_name == "sdlc_execute_sql":
+                    output = sdlc_execute_sql(**call_args)
+                else:
+                    output = f"SYSTEM ERROR: Unhandled SDLC tool '{call_name}'"
+                    global_logger.warning(f"❌ Unhandled SDLC tool '{call_name}'")
+            except Exception as e:
+                output = f"SYSTEM ERROR: Failed to execute tool '{call_name}'. Invalid arguments or internal error: {e}\nPlease correct your arguments and try again."
+                global_logger.warning(f"⚠️ Tool execution failed: {e}")
                 
             agent_tracer.info(f"[OUTPUT]:\\n{output}\\n")
             combined_output += output

@@ -19,10 +19,10 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool
     global_logger.info(f"⏱️  Pulse Executed at {timestamp}")
 
     # 0. Background Synthesis Override
-    if resume_session_id and resume_session_id.startswith("dreamer-"):
-        global_logger.info(f"🚀 Resuming dreamer (Background Synthesis) | Session: {resume_session_id}", extra={"color": typer.colors.GREEN})
-        execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc", no_stream=no_stream)
-        return True
+    # if resume_session_id and resume_session_id.startswith("dreamer-"):
+    #     global_logger.info(f"🚀 Resuming dreamer (Background Synthesis) | Session: {resume_session_id}", extra={"color": typer.colors.GREEN})
+    #     execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc", no_stream=no_stream)
+    #     return True
 
     # 1. The Reasoner's Domain (Highest Priority)
     blocked_tasks = get_blocked_tasks()
@@ -106,7 +106,7 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool
                 return True # Exit cycle to enforce strict cooldown
 
     # 3. Idle Background Tasks (Dreaming)
-    if not resume_session_id:
+    if not resume_session_id and False: # Disabled
         global_logger.info("💤 Factory is idle. Waking Dreamer for background synthesis...", extra={"color": typer.colors.CYAN})
         all_agents = []
         for wf_name in active_workflows:

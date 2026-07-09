@@ -27,29 +27,27 @@ def get_db_connection():
     except psycopg.OperationalError as e:
         raise Exception(f"Failed to connect to PostgreSQL after exponential backoff: {e}")
 
+# Cache the model globally so it isn't loaded from disk on every invocation
+_EMBEDDING_MODEL = None
+
 def get_embedding(text: str) -> list[float]:
-    """Generates embeddings using vLLM/OpenAI API."""
-    from openai import OpenAI
-    import os
-
-    config = get_config()
-    api_key = config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
-    # Use an embedding-specific base_url if provided, otherwise default to Google's OpenAI-compatible endpoint.
-    # This prevents embedding requests from hitting the vLLM text-generation node.
-    base_url = config.get("embedding_base_url", "https://generativelanguage.googleapis.com/v1beta/openai/")
-
-    api_timeout = float(config.get("api_timeout", 600.0))
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=api_timeout)
-
+    """Generates embeddings using local SentenceTransformers."""
+    global _EMBEDDING_MODEL
+    
+    if _EMBEDDING_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        import torch
+        
+        # Load the model. all-mpnet-base-v2 naturally outputs 768 dimensions.
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
+        
     try:
-        response = client.embeddings.create(
-            model='gemini-embedding-001', # Change this if vLLM uses a different embedding model
-            input=text,
-            dimensions=768
-        )
-        return response.data[0].embedding
+        # Generate the embedding
+        embedding = _EMBEDDING_MODEL.encode(text)
+        return embedding.tolist()
     except Exception as e:
-        raise Exception(f"Embedding failed: {e}")
+        raise Exception(f"Local Embedding failed: {e}")
 def do_query_traces(query_type: str, session_id: str = None, agent_name: str = None, limit: int = 5, include_prompts: bool = False) -> list[dict]:
     """Queries OpenTelemetry spans from the database safely with truncation."""
     import json

@@ -17,22 +17,31 @@ def test_get_db_connection_missing_string(mocker):
         get_db_connection()
 
 def test_get_embedding(mocker):
-    mocker.patch("sdlc_factory.db.get_config", return_value={"base_url": "test_url"})
-    mock_client_class = mocker.patch("openai.OpenAI")
-    mock_client = mock_client_class.return_value
-    mock_response = mocker.MagicMock()
-    mock_response.data = [mocker.MagicMock(embedding=[0.1, 0.2, 0.3])]
-    mock_client.embeddings.create.return_value = mock_response
+    # Reset the global to ensure we test the initialization
+    import sdlc_factory.db
+    sdlc_factory.db._EMBEDDING_MODEL = None
+    
+    mocker.patch("torch.cuda.is_available", return_value=False)
+    mock_transformer_class = mocker.patch("sentence_transformers.SentenceTransformer")
+    mock_transformer = mock_transformer_class.return_value
+    
+    import numpy as np
+    mock_transformer.encode.return_value = np.array([0.1, 0.2, 0.3])
 
     vector = get_embedding("hello world")
     assert vector == [0.1, 0.2, 0.3]
-    mock_client.embeddings.create.assert_called_once()
+    mock_transformer_class.assert_called_once_with('sentence-transformers/all-mpnet-base-v2', device='cpu')
+    mock_transformer.encode.assert_called_once_with("hello world")
 
 def test_get_embedding_api_failure(mocker):
-    mocker.patch("sdlc_factory.db.get_config", return_value={"base_url": "test_url"})
-    mock_client_class = mocker.patch("openai.OpenAI")
-    mock_client = mock_client_class.return_value
-    mock_client.embeddings.create.side_effect = Exception("API down")
+    # Reset the global
+    import sdlc_factory.db
+    sdlc_factory.db._EMBEDDING_MODEL = None
     
-    with pytest.raises(Exception, match="Embedding failed: API down"):
+    mocker.patch("torch.cuda.is_available", return_value=False)
+    mock_transformer_class = mocker.patch("sentence_transformers.SentenceTransformer")
+    mock_transformer = mock_transformer_class.return_value
+    mock_transformer.encode.side_effect = Exception("Model down")
+    
+    with pytest.raises(Exception, match="Local Embedding failed: Model down"):
         get_embedding("hello")

@@ -255,6 +255,13 @@ class SdlcWorkflow(WorkflowPlugin):
                 shutil.copy(parent_ws / "docs" / "PROD_SPEC.md", int_ws / "docs" / "PROD_SPEC.md")
             except FileNotFoundError as e:
                 global_logger.warning(f"Integration Hydration Warning: Missing parent artifacts: {e}")
+            for mod_id in expected_modules:
+                mod_ws = get_workspace(mod_id)
+                mod_name = mod_id.replace(f"{parent_id}-MOD-", "")
+                for dir_name in ["src", "tests", "dist"]:
+                    src_dir = mod_ws / dir_name
+                    if src_dir.exists():
+                        shutil.copytree(src_dir, int_ws / dir_name / mod_name, dirs_exist_ok=True)
 
             global_logger.info(f"[SUCCESS] All modules resolved! Spawned {integration_id}", extra={"color": typer.colors.MAGENTA})
 

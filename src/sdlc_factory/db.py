@@ -39,6 +39,8 @@ def get_embedding(text: str) -> list[float]:
         import torch
         
         # Load the model. all-mpnet-base-v2 naturally outputs 768 dimensions.
+        # This is the local embedding source (replacing the previous Gemini
+        # embeddings); the pgvector schema uses VECTOR(768) to match.
         device = "cuda" if torch.cuda.is_available() else "cpu"
         _EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-mpnet-base-v2', device=device)
         

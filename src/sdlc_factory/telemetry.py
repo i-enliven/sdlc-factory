@@ -1,20 +1,25 @@
 import logging
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource
 from openinference.instrumentation.openai import OpenAIInstrumentor
 from sdlc_factory.utils import global_logger
 
 _TELEMETRY_INITIALIZED = False
 
-def setup_telemetry(config_data: dict) -> None:
-    """Initializes OpenTelemetry tracing based on config."""
+def setup_telemetry(config_data: dict, batch: bool = False) -> None:
+    """Initializes OpenTelemetry tracing based on config.
+
+    `batch=True` (long-lived daemon) uses BatchSpanProcessor to avoid
+    synchronous export latency per span; the default SimpleSpanProcessor is
+    correct for short-lived CLI pulses (it exports on exit).
+    """
     global _TELEMETRY_INITIALIZED
     if _TELEMETRY_INITIALIZED:
         return
     _TELEMETRY_INITIALIZED = True
-        
+    
     tracing_enabled = config_data.get("tracing_enabled", False)
     
     if not tracing_enabled:
@@ -39,7 +44,12 @@ def setup_telemetry(config_data: dict) -> None:
         # We use a try-except around adding the processor so we fallback gracefully if it fails to connect/resolve
         # Note: OpenTelemetry OTLP Exporter usually doesn't fail on init if unreachable, it fails on send or warning,
         # but wrapping it provides a fail-safe.
-        processor = SimpleSpanProcessor(OTLPSpanExporter(endpoint=tracing_endpoint, insecure=True))
+        if batch:
+            # Daemon mode: batch exports to avoid per-span synchronous latency.
+            processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=tracing_endpoint, insecure=True))
+        else:
+            # CLI pulse mode: export immediately (flushed on process exit).
+            processor = SimpleSpanProcessor(OTLPSpanExporter(endpoint=tracing_endpoint, insecure=True))
         tracer_provider.add_span_processor(processor)
         
         OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)

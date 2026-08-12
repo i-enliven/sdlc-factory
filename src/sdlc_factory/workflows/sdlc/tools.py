@@ -10,6 +10,13 @@ def run_cli_command(command: str, cwd: str = ".", timeout: Optional[int] = None)
         command: The bash command to execute.
         cwd: The working directory to execute the command in.
         timeout: Optional timeout in seconds to prevent hanging.
+
+    NOTE (trust boundary): This intentionally uses `shell=True` so the LLM can
+    emit full bash (heredocs, `&&` chains, `cd x && ...`). It is therefore a
+    deliberate shell-injection surface: the executing agent is treated as a
+    trusted operator within its sandboxed workspace, and commands are NOT
+    confined to an allowlist. Do not lower this trust boundary without adding
+    real sandboxing (env isolation, cwd confinement, command allowlist).
     """
     out_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
     out_path = out_file.name

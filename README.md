@@ -31,52 +31,74 @@ docker compose up -d
 
 ## 🛠️ Configuration & Tracing
 
-To connect the CLI with the framework components and external LLM models, create a configuration file at `~/.sdlc-factory.json`. This file acts as the master manifest for database bounds, pathing, and GenAI observability.
+To connect the CLI with the framework components and external LLM models, create a configuration file at `~/.sdlc-factory/config.json`. This file acts as the master manifest for database bounds, pathing, and GenAI observability.
 
 > [!NOTE]
-> The internal Markdown protocols (`SOUL.md` and `AGENTS.md`) and state machine structures have been heavily tuned specifically for the **Gemini** family of models (e.g., `gemini-3.1-pro-preview` and `gemini-3.1-pro-preview-customtools`). While you can technically swap the backend model via the configuration layer, reasoning and protocol adherence are optimized exclusively for Google's GenAI endpoints.
+> The internal Markdown protocols (`SOUL.md` and `AGENTS.md`) and state machine structures were originally tuned for the **Gemini** family of models. The engine now defaults to a **vLLM** OpenAI-compatible endpoint (`provider: "vllm"`), while remaining configurable per-agent to Google GenAI (`provider: "google"`) or any other OpenAI-compatible backend. Protocols are model-agnostic at the tool-calling layer.
 
-### Native `~/.sdlc-factory.json` Example
+### Native `~/.sdlc-factory/config.json` Example
 ```json
 {
   "workspace_root": "path/to/sdlc-factory/workspace",
-  "agents_root": "path/to/sdlc-factory/agents",
+  "sessions_root": "path/to/sdlc-factory/sessions",
   "connection_string": "dbname=factory-dev user=postgres password=secret host=0.0.0.0",
+  "vllm_base_url": "http://sagittarius-a.mara-balance.ts.net:8100/v1",
   "gemini_api_key": "YOUR_GEMINI_API_KEY",
   "vertex_api_key": "YOUR_VERTEX_API_KEY",
   "hf_token": "YOUR_HF_TOKEN",
   "max_retry_limit": 5,
   "cli_command_timeout": 300,
+  "module_timeout_hours": 72,
+  "generation_max_tokens": 24000,
+  "max_model_len": 65536,
   "models": {
     "planner": {
       "model": "gemini-3.1-pro-preview",
+      "provider": "vllm",
       "temperature": 0.2,
       "max_iterations": 60
     },
     "architect": {
       "model": "gemini-3.1-pro-preview",
+      "provider": "vllm",
       "temperature": 0.0,
       "max_iterations": 60
     },
     "tester": {
       "model": "gemini-3.1-pro-preview-customtools",
+      "provider": "vllm",
       "temperature": 0.0,
       "max_iterations": 90
     },
     "coder": {
       "model": "gemini-3.1-pro-preview-customtools",
+      "provider": "vllm",
       "temperature": 0.0,
       "max_iterations": 120
     },
     "deployer": {
       "model": "gemini-3.1-pro-preview-customtools",
+      "provider": "vllm",
       "temperature": 0.0,
       "max_iterations": 60
     },
     "monitor": {
       "model": "gemini-3.1-pro-preview-customtools",
+      "provider": "vllm",
       "temperature": 0.0,
       "max_iterations": 60
+    },
+    "reasoner": {
+      "model": "gemini-3.1-pro-preview",
+      "provider": "vllm",
+      "temperature": 0.0,
+      "max_iterations": 60
+    },
+    "dreamer": {
+      "model": "gemini-3.1-pro-preview",
+      "provider": "vllm",
+      "temperature": 0.0,
+      "max_iterations": 30
     }
   },
   "tracing_enabled": true,
@@ -86,8 +108,9 @@ To connect the CLI with the framework components and external LLM models, create
 
 ### Telemetry (Arize Phoenix)
 The factory includes native **OTLP telemetry integration** for full visibility into LLM node executions, token usage, and subagent latency. 
-* Set `"tracing_enabled": true` to log OpenTelemetry traces for LangChain API calls.
+* Set `"tracing_enabled": true` to log OpenTelemetry traces for OpenAI-compatible API calls.
 * Navigate to [`http://127.0.0.1:6006`](http://127.0.0.1:6006) to interact with the live trace UI payload! (Gracefully drops telemetry if the container is offline).
+* Single CLI pulses use `SimpleSpanProcessor`; the long-lived daemon (`sdlc-factory run`) uses `BatchSpanProcessor` to avoid per-span export latency.
 
 ---
 
@@ -119,7 +142,7 @@ If an agent is executing a command that you want to intercept (e.g., it is trapp
 - If you change your mind, press `Ctrl+D` at the override prompt to seamlessly resume execution without interference.
 
 ### 5. Resuming a Paused Session
-Agent histories are serialized and saved automatically. If you hard-abort a run or wish to continue a specific task from a previous state, you can resume it using its unique session ID (found in your `agents/sessions/` directory or trace logs):
+Agent histories are serialized and saved automatically. If you hard-abort a run or wish to continue a specific task from a previous state, you can resume it using its unique session ID (found in your `sessions_root` directory, default `~/.sdlc-factory/sessions`, or trace logs):
 ```bash
 sdlc-factory heartbeat --resume <UUID>
 ```
@@ -193,9 +216,10 @@ The Factory natively exposes an MCP Server (`mcp_server.py`) to allow seamless i
 The core methodology of SDLC Factory separates an agent’s identity from its technical capabilities using plain-text Markdown protocols:
 1. **`SOUL.md`**: Acts as the agent's **Constitution**. It defines the persona, ethical boundaries, decision-making frameworks, and communication style. 
 2. **`AGENTS.md`**: Acts as the **Operational Manual**. It defines the core identity constraints and macro tasks the persona manages.
-3. **`HEARTBEAT.md`**: Controls the rigorous **State Machine Transitions** and phase-loops required during autonomous workflow operations.
-4. **`PROTOCOL.md`**: The global rules of engagement. Defines the decentralized, event-driven methodology, directory structures, and boundary limits of the shared task environments.
-5. **`SKILL.md`**: Documented mappings of natively bound Python tools allowing an agent to fetch dynamic localized context, execute state progressions, or interact directly with the Postgres semantic memory store.
+3. **`IDENTITY.md`**: A compact identity card (name, persona, primary objective, interface mandate).
+4. **`MEMORY.md`**: The agent's persistent state checkpoint (e.g. the Dreamer's `last_analyzed_trace_timestamp` per target agent).
+5. **`PROTOCOL.md`** (shared): The global rules of engagement. Defines the decentralized, event-driven methodology, directory structures, and boundary limits of the shared task environments. Per-agent `PROTOCOL.md`/`SKILL.md` are **symlinks** into `agents/shared/`.
+6. **`SKILL.md`** (shared): Documented mappings of natively bound Python tools allowing an agent to fetch dynamic localized context, execute state progressions, or interact directly with the Postgres semantic memory store.
 
 By utilizing Markdown files, the `sdlc-factory` allows you to reprogram your engineering team's entire standards culture safely in plain text without touching the internal Python runtime!
 
@@ -203,7 +227,7 @@ By utilizing Markdown files, the `sdlc-factory` allows you to reprogram your eng
 
 ## 👥 The Headless Engineering Team
 
-Responsibilities are distributed across six highly specialized roles:
+Responsibilities are distributed across eight highly specialized roles:
 
 | Role | Responsibility | Key Objective |
 | :--- | :--- | :--- |
@@ -213,17 +237,19 @@ Responsibilities are distributed across six highly specialized roles:
 | **Tester** | Quality Assurance | Creates unit, integration, and E2E tests to validate the Coder. |
 | **Deployer** | CI/CD Engineering | Manages heuristics and packaging for `docker` artifact delivery. |
 | **Monitor** | Observability | Sandbox validation, endpoint polls, and pipeline audits. |
+| **Reasoner** | Block Resolution | Wakes on `BLOCKED` state, diagnoses the fatal root cause, and drives the task back to a recoverable phase. |
+| **Dreamer** | Background Synthesis | On idle pulses, analyzes historical traces and writes high-signal heuristics into agent memory stores. |
 
 ---
 
 ## ⚙️ Technical Engine (Python CLI)
 
 Under the hood, the Python-based execution engine (`src/sdlc_factory/`) drives the deterministic pipelines without relying on heavy third-party agent wrappers:
-* **`cli.py` & `heartbeat.py`**: The core daemon orchestrators. They expose the user endpoints, load pending queues from the state ledger, enforce task blockages, and route tasks to agents.
+* **`cli.py` & `heartbeat.py`**: The core daemon orchestrators. They expose the user endpoints, load pending queues from the state ledger, enforce task blockages, and route tasks to agents. The heartbeat wakes the **Reasoner** on `BLOCKED` states and the **Dreamer** on idle pulses.
 * **`agent.py`**: The dynamic LLM integration layer. Handles parallel tool execution, contextual human-in-the-loop overrides (`Ctrl+C`), and serializes agent history to `.session` files for deterministic resumption.
 * **`chat.py`**: A read-only diagnostic REPL. Safely loads historic `.session` payloads into the LLM while disabling file modification tooling to prevent state corruption during operator interrogation.
-* **`state.py`**: A strict JSON Schema validation engine executing rigorous handoffs between phases (e.g. Deployer cannot act until the Tester submits a properly signed JSON schema).
-* **`telemetry.py`**: Automatically wraps generative execution via OpenTelemetry, streaming logs natively to Arize Phoenix.
+* **`state.py`**: A strict JSON Schema validation engine executing rigorous handoffs between phases (e.g. Deployer cannot act until the Tester submits a properly signed JSON schema). Failed payloads are never silently "hydrated"; ledger drift is surfaced loudly. Integration gathering promotes hung child modules to `BLOCKED` after `module_timeout_hours` (default 72h).
+* **`telemetry.py`**: Automatically wraps generative execution via OpenTelemetry, streaming logs natively to Arize Phoenix. Uses `SimpleSpanProcessor` for CLI pulses and `BatchSpanProcessor` for the daemon.
 * **`tools.py`**: Houses the strict native capability scripts (like `advance_state` and `search_codebase`) that are systematically injected into the LLM during runtime.
 * **`memory.py` & `db.py`**: Natively provisions **persistent semantic vector memory** using Postgres `pgvector`—allowing agents to embed historical bug reports and retrieve them via cosine-similarity metrics without hallucinating.
 * **`mcp_server.py`**: A `FastMCP` implementation that exposes native Factory context, state management, and memory tools to external AI clients.

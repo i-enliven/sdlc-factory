@@ -66,7 +66,13 @@ def run_chat_session(session_id: str):
         }
     ]
 
-    messages.insert(0, {"role": "system", "content": system_instruction.strip()})
+    # The .session file already begins with the agent's system instruction.
+    # Replace it in place rather than prepending a second system message,
+    # which many providers reject or mis-handle.
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = system_instruction.strip()
+    else:
+        messages.insert(0, {"role": "system", "content": system_instruction.strip()})
     
     typer.secho(f"\n💬 Entering Chat Mode with {agent_name} (Session: {session_id})", fg=typer.colors.MAGENTA, bold=True)
     typer.secho("⚠️  Chat mode - tools disabled (except sdlc_store_memory). The session file will not be updated.", fg=typer.colors.YELLOW)

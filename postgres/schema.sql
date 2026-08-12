@@ -7,7 +7,7 @@ CREATE TABLE codebase_embeddings (
     file_path TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
-    embedding VECTOR(768) -- Gemini embeddings are 768 dimensions
+    embedding VECTOR(768) -- Local SentenceTransformer (all-mpnet-base-v2) embeddings: 768 dims
 );
 CREATE INDEX ON codebase_embeddings USING hnsw (embedding vector_cosine_ops);
 

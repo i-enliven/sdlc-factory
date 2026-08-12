@@ -8,7 +8,6 @@ if LOCAL_PATH not in sys.path:
     sys.path.insert(0, LOCAL_PATH)
 
 import json
-from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from sdlc_factory.utils import setup_global_logger
 from sdlc_factory.state import get_pending_task, get_blocked_tasks, do_advance_state

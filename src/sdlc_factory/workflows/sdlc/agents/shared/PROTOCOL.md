@@ -45,6 +45,8 @@ The `deployer` must produce a standalone archive.
 4. **Contract**: Define the `entry_command` in `dist/metadata.json` assuming extraction to a clean root.
 5. **Asset Compilation**: If the stack requires compilation (e.g., Vite/React UI or compiled binaries), the `deployer` MUST execute the build step (e.g., `pnpm build`) and package the resulting built artifacts for the execution environment, rather than serving raw unbuilt source code.
 
+> **Note on integration layout:** In an `-INTEGRATION` workspace, each module's content is consolidated under the shared `src/`, `tests/`, and `dist/` roots **namespaced by module name** (e.g. `src/<mod_name>/...`) to prevent cross-module file collisions. This is the intended, clean layout.
+
 ## 5. Tool Execution & Resource Discipline
 * **Context Primacy (MANDATORY):** You are a **Pre-Hydrated** agent. Your wake-up prompt contains a `SYSTEM CONTEXT` block with your specific module boundaries, environment rules, and curated code snippets (if defined). You MUST rely on this as your primary source of truth for the current task.
 * **On-Demand Discovery:** The `sdlc_search_codebase` tool is your primary mechanism for discovering logic, utilities, or patterns in **brownfield projects** that are NOT included in your initial pre-hydrated context. Use it proactively to fill knowledge gaps, discover legacy dependencies, or align with existing project conventions.

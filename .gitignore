@@ -6,3 +6,7 @@ build/
 __pycache__
 sdlc-factory.code-workspace
 .vscode
+.coverage
+.pytest_cache/
+*.egg-info/
+.venv/

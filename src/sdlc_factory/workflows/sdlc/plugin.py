@@ -1,6 +1,7 @@
 import json
 import shutil
 import typer
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -8,7 +9,7 @@ from sdlc_factory.workflows.base import WorkflowPlugin
 import re
 import logging
 from .tools import run_cli_command
-from sdlc_factory.utils import global_logger, read_json, write_json, get_workspace
+from sdlc_factory.utils import global_logger, read_json, write_json, get_workspace, get_config
 
 class SdlcWorkflow(WorkflowPlugin):
     @property
@@ -227,20 +228,35 @@ class SdlcWorkflow(WorkflowPlugin):
     def _gather_modules(self, current_task_id: str):
         parent_id = current_task_id.split("-MOD-")[0]
         parent_ws = get_workspace(parent_id)
-        
+
         arch_data = read_json(parent_ws / "handoff" / "arch_payload.json")
         expected_modules = [f"{parent_id}-MOD-{s.get('module_name')}" for s in arch_data.get("vertical_slices", [])]
-        
+
+        # Staleness timeout: a child module that stays unresolved longer than
+        # this threshold is treated as a hung/orphaned block so it can't freeze
+        # the whole epic forever. Configurable via `module_timeout_hours`.
+        timeout_hours = float(get_config().get("module_timeout_hours", 72))
+        timeout_seconds = timeout_hours * 3600
+
         all_resolved = True
+        stalled = []
         for mod_id in expected_modules:
             if mod_id == current_task_id:
                 continue
-                
-            mod_state = read_json(get_workspace(mod_id) / ".state" / "current.json")
+
+            mod_state_file = get_workspace(mod_id) / ".state" / "current.json"
+            mod_state = read_json(mod_state_file)
             if mod_state.get("phase") != "MODULE_RESOLVED":
                 all_resolved = False
-                break
-                
+                # Mark modules that have been stuck in the same phase for too long
+                # (proxy: mtime of the state file, since current.json carries no timestamp).
+                try:
+                    age = time.time() - mod_state_file.stat().st_mtime
+                except Exception:
+                    age = 0
+                if age > timeout_seconds:
+                    stalled.append(mod_id)
+
         if all_resolved:
             integration_id = f"{parent_id}-INTEGRATION"
             int_ws = get_workspace(integration_id)
@@ -262,6 +278,30 @@ class SdlcWorkflow(WorkflowPlugin):
                     src_dir = mod_ws / dir_name
                     if src_dir.exists():
                         shutil.copytree(src_dir, int_ws / dir_name / mod_name, dirs_exist_ok=True)
+
+            global_logger.info(f"[SUCCESS] All modules resolved! Spawned {integration_id}", extra={"color": typer.colors.MAGENTA})
+
+        elif stalled:
+            # One or more child modules have been stuck unresolved past the timeout.
+            # Promote them to BLOCKED so the reasoner/heartbeat can wake and address
+            # the hung module instead of freezing the epic indefinitely.
+            for mod_id in stalled:
+                mod_ws = get_workspace(mod_id)
+                mod_state = read_json(mod_ws / ".state" / "current.json")
+                mod_state["phase"] = "BLOCKED"
+                write_json(mod_ws / ".state" / "current.json", mod_state)
+                global_logger.error(
+                    f"🔴 STALLED MODULE: {mod_id} unresolved for >{timeout_hours}h. "
+                    f"State promoted to BLOCKED for reasoner intervention.",
+                    extra={"color": typer.colors.RED, "bold": True}
+                )
+
+        else:
+            global_logger.info(
+                f"⏳ Gather waiting: modules not yet resolved for {parent_id}. "
+                f"(Stall threshold: {timeout_hours}h)",
+                extra={"color": typer.colors.CYAN}
+            )
 
             global_logger.info(f"[SUCCESS] All modules resolved! Spawned {integration_id}", extra={"color": typer.colors.MAGENTA})
 

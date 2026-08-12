@@ -45,7 +45,7 @@ def abort(msg: str, code: int = 1):
 
 def get_config() -> dict:
     if not CONFIG_FILE.exists():
-        abort("Configuration missing. Check your ~/.sdlc-factory.json")
+        abort("Configuration missing. Check your ~/.sdlc-factory/config.json")
     return read_json(CONFIG_FILE)
 
 def setup_global_logger():
@@ -102,7 +102,7 @@ def setup_global_logger():
 def get_workspace_root() -> Path:
     config = get_config()
     if not config.get("workspace_root"):
-        abort("'workspace_root' not set. Check your ~/.sdlc-factory.json")
+        abort("'workspace_root' not set. Check your ~/.sdlc-factory/config.json")
     return Path(config["workspace_root"])
 
 def get_workspace(task_id: str) -> Path:

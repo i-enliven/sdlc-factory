@@ -7,9 +7,10 @@ def test_run_heartbeat_cycle_blocked(mocker):
     mocker.patch("sdlc_factory.heartbeat.get_blocked_tasks", return_value=[{"task_id": "blk1", "issue_file": "ish.md"}])
     mock_execute = mocker.patch("sdlc_factory.heartbeat.execute_agent")
     
+    # A BLOCKED task wakes the reasoner agent, which IS installed now.
     assert run_heartbeat_cycle() == True
-    # Reasoner is currently commented out, so it shouldn't execute
-    mock_execute.assert_not_called()
+    mock_execute.assert_called_once()
+    assert mock_execute.call_args[0][0] == "reasoner"
 
 def test_run_heartbeat_cycle_pending(mocker, tmp_path):
     mocker.patch("sdlc_factory.heartbeat.get_blocked_tasks", return_value=[])
@@ -70,5 +71,8 @@ def test_run_heartbeat_cycle_idle(mocker, tmp_path):
     
     mock_execute = mocker.patch("sdlc_factory.heartbeat.execute_agent")
     
-    assert run_heartbeat_cycle() == False
-    mock_execute.assert_not_called()
+    # On idle pulses the Dreamer (background synthesis) is now enabled, so the
+    # cycle returns True and dispatches the dreamer for the target worker agent.
+    assert run_heartbeat_cycle() == True
+    assert mock_execute.called
+    assert mock_execute.call_args[0][0] == "dreamer"

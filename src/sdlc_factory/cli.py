@@ -6,7 +6,7 @@ from pathlib import Path
 from importlib import metadata
 import time
 
-from sdlc_factory.utils import global_logger, abort, get_workspace, get_workspace_root, setup_global_logger, get_config
+from sdlc_factory.utils import global_logger, abort, get_workspace, setup_global_logger
 from sdlc_factory.state import get_pending_task, get_blocked_tasks, do_advance_state
 from sdlc_factory.memory import build_context, do_index_codebase, do_search_codebase, do_store_memory
 from sdlc_factory.heartbeat import run_heartbeat_cycle
@@ -182,7 +182,7 @@ def run(interval: int = typer.Option(30, help="Seconds to wait between idle hear
     global_logger.info(f"🚀 Starting continuous SDLC Factory heartbeat...", extra={"color": typer.colors.MAGENTA, "bold": True})
     try:
         while True:
-            executed = run_heartbeat_cycle(resume_session_id=resume, no_stream=no_stream)
+            executed = run_heartbeat_cycle(resume_session_id=resume, no_stream=no_stream, batch=True)
             resume = None # Only resume the first cycle
             if executed:
                 time.sleep(2) 

@@ -1,9 +1,8 @@
-import sys
 import signal
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Tuple, Any, List
+from typing import Optional, Tuple, Any
 import typer
 import time
 from datetime import datetime
@@ -14,7 +13,7 @@ import hashlib
 import os
 from openinference.instrumentation import using_session
 
-from sdlc_factory.utils import get_config, abort, global_logger, get_workspace, format_size
+from sdlc_factory.utils import get_config, abort, global_logger, format_size
 
 from sdlc_factory.tools import (
     sdlc_advance_state,

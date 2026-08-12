@@ -13,23 +13,26 @@ from sdlc_factory.workflows import get_workflow
 
 _LAST_DREAMED_AGENT_INDEX = 0
 
-def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool = False) -> bool:
-    """Executes one pass of the pipeline. Returns True if a task was processed."""
+def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool = False, batch: bool = False) -> bool:
+    """Executes one pass of the pipeline. Returns True if a task was processed.
+
+    `batch=True` selects BatchSpanProcessor telemetry (long-lived daemon).
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     global_logger.info(f"⏱️  Pulse Executed at {timestamp}")
 
     # 0. Background Synthesis Override
-    # if resume_session_id and resume_session_id.startswith("dreamer-"):
-    #     global_logger.info(f"🚀 Resuming dreamer (Background Synthesis) | Session: {resume_session_id}", extra={"color": typer.colors.GREEN})
-    #     execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc", no_stream=no_stream)
-    #     return True
+    if resume_session_id and resume_session_id.startswith("dreamer-"):
+        global_logger.info(f"🚀 Resuming dreamer (Background Synthesis) | Session: {resume_session_id}", extra={"color": typer.colors.GREEN})
+        execute_agent("dreamer", "", exclude_files=None, session_id=resume_session_id, is_resume=True, workflow_name="sdlc", no_stream=no_stream)
+        return True
 
     # 1. The Reasoner's Domain (Highest Priority)
     blocked_tasks = get_blocked_tasks()
     if blocked_tasks:
         global_logger.error("🔴 BLOCKED STATE DETECTED. Waking Reasoner...", extra={"bold": True})
         task = blocked_tasks[0] # Handle one block at a time
-        
+
         prompt = (
             f"HEARTBEAT_WAKEUP: FATAL PIPELINE BLOCK. Task ID: {task['task_id']}. "
             f"Review issue at: {task['issue_file']}. \n"
@@ -37,7 +40,7 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool
             f"Payload: {json.dumps(task)}"
         )
         global_logger.info(f"🧠 Dispatching task to reasoner for {task['task_id']}...", extra={"color": typer.colors.GREEN})
-        # execute_agent("reasoner", prompt, no_stream=no_stream)
+        execute_agent("reasoner", prompt, no_stream=no_stream)
         return True # Exit cycle to enforce strict cooldown
 
     # 2. Standard Queue for Worker Agents
@@ -99,14 +102,14 @@ def run_heartbeat_cycle(resume_session_id: Optional[str] = None, no_stream: bool
                 is_resume = bool(resume_session_id)
                 from sdlc_factory.telemetry import setup_telemetry
                 from sdlc_factory.utils import get_config
-                setup_telemetry(get_config())
+                setup_telemetry(get_config(), batch=batch)
                 global_logger.info(f"🚀 Dispatching {agent} (Workflow: {wf_name}) | Phase: {task['phase']} (Module: {task['assigned_module']}) | Session: {session_id}", extra={"color": typer.colors.GREEN})
                 result = execute_agent(agent, prompt, exclude_files=None, session_id=session_id, is_resume=is_resume, workflow_name=wf_name, no_stream=no_stream)
                 typer.secho(f"\n🤖 Agent Reply:\n{result}\n", fg=typer.colors.MAGENTA)
                 return True # Exit cycle to enforce strict cooldown
 
     # 3. Idle Background Tasks (Dreaming)
-    if not resume_session_id and False: # Disabled
+    if not resume_session_id: # Enabled: runs dreamer on idle pulses
         global_logger.info("💤 Factory is idle. Waking Dreamer for background synthesis...", extra={"color": typer.colors.CYAN})
         all_agents = []
         for wf_name in active_workflows:

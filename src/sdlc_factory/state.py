@@ -1,13 +1,12 @@
 import json
-import shutil
 import typer
 from pathlib import Path
 from typing import Optional
 from jsonschema import validate, ValidationError
 
 from sdlc_factory.utils import (
-    global_logger, get_config, read_json, 
-    write_json, abort, get_workspace_root, get_workspace
+    global_logger, get_config, read_json,
+    write_json, get_workspace_root, get_workspace
 )
 from sdlc_factory.workflows import get_workflow
 
@@ -28,6 +27,12 @@ def auto_hydrate_payload(ws: Path, phase: str, task_id: str, module_id: str, wor
         "module_id": module_id
     }
     
+    # Only hydrate genuinely successful handoffs. A payload that already
+    # reports an error (e.g. a regression) must NOT be "healed" with success
+    # boilerplate, or the schema failure would be silently masked.
+    if data.get("status") == "error":
+        return
+
     if phase == "MONITOR":
         updates["final_resolution"] = "RESOLVED"
     
@@ -206,6 +211,14 @@ def do_advance_state(task_id: str, to: str, regression: bool = False) -> str:
 
     if state.get("phase") == current_phase:
         state["phase"] = to
+    else:
+        # The ledger drifted (e.g. a regression already moved the phase).
+        # Log it loudly rather than silently reporting a transition that
+        # did not actually occur.
+        global_logger.warning(
+            f"[DRIFT] current.json phase was '{state.get('phase')}', expected '{current_phase}'. "
+            f"Requested '{to}' was NOT applied.", extra={"color": typer.colors.YELLOW}
+        )
     if not is_regression_recovery:
         state["retry_count"] = 0
     write_json(state_file, state)

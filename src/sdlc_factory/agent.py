@@ -469,15 +469,18 @@ def _process_tool_call(call, session_cwd: Path, cli_timeout: int, log_prefix: st
         if i > 0:
             combined_output += "\n---\n"
             
-        for k, v in list(call_args.items()):
-            if isinstance(v, str):
-                call_args[k] = v.strip().strip('"\'').strip()
-
         import copy
         sub_call = copy.copy(call)
         sub_call.function.arguments = call_args
         
         if call_name.startswith("sdlc_"):
+            # Only the native CLI tool args may be wrapped in stray quotes by the
+            # LLM (double-encoded JSON). NEVER strip quote characters off raw shell
+            # commands (run_cli_command): a heredoc/echo ending in a quote would
+            # lose its closing `"` and fail with "Unterminated quoted string".
+            for k, v in list(call_args.items()):
+                if isinstance(v, str):
+                    call_args[k] = v.strip().strip('"\'')
             cmd_name = call_name.replace("_", "-").replace("sdlc-", "sdlc-factory ")
             cmd_str = f"{cmd_name} " + " ".join([f"--{k.replace('_', '-')} \"{v}\"" for k,v in call_args.items()])
             

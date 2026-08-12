@@ -70,4 +70,3 @@ The **Dimensional Factor Pulse (DFP)** is a containerized financial dashboard de
 * **Integration Integrity**: Frontend fetches return 200 OK status codes via the internal Nginx proxy.
 * **Data Accuracy**: The heatmap displays accurate premium calculations (4 decimal places) and handles weekend/holiday data gracefully.
 * **UI/UX**: The heatmap is interactive and visually appealing, with clear color differentiation between positive and negative premiums.
-* **Deployment Speed**: Time from "PRD Input" to "Live Dashboard" is less than 30 minutes.

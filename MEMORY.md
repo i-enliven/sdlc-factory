@@ -13,13 +13,13 @@
       "last_analyzed_trace_timestamp": "2026-09-27T16:17:12.105475+00:00"
     },
     "deployer": {
-      "last_analyzed_trace_timestamp": "2026-09-27T21:46:56.584442+00:00"
+      "last_analyzed_trace_timestamp": "2026-09-27T21:11:53.226832+00:00"
     },
     "tester": {
-      "last_analyzed_trace_timestamp": "2026-09-27T20:04:38.566630+00:00"
+      "last_analyzed_trace_timestamp": "2026-09-27T20:28:09.777503+00:00"
     },
     "monitor": {
-      "last_analyzed_trace_timestamp": "2026-09-27T21:50:05.331691+00:00"
+      "last_analyzed_trace_timestamp": "2026-09-27T21:14:28.793741+00:00"
     }
   }
 }

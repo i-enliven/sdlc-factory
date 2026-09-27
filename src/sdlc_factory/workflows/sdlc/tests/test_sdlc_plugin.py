@@ -54,3 +54,31 @@ def test_integration_transition_module_resolved(tmp_path, mock_config):
     wf.on_transition(int_ws, "t1-INTEGRATION", "QA_REVIEW", "MODULE_RESOLVED", state)
     
     assert state["phase"] == "INTEGRATION_TESTING"
+
+def test_gather_modules_partial_resolution_waiting(tmp_path, mock_config):
+    parent = tmp_path / "test_workspace" / "t1"
+    parent.mkdir(parents=True)
+    (parent / "handoff").mkdir()
+    (parent / "docs").mkdir()
+    (parent / ".state").mkdir()
+    (parent / "docs" / "API_CONTRACTS.md").write_text("api")
+    (parent / "docs" / "PROD_SPEC.md").write_text("spec")
+    write_json(parent / "handoff" / "arch_payload.json", {
+        "vertical_slices": [{"module_name": "api"}, {"module_name": "ui"}]
+    })
+    
+    child_api = tmp_path / "test_workspace" / "t1-MOD-api"
+    child_api.mkdir(parents=True)
+    (child_api / ".state").mkdir()
+    write_json(child_api / ".state" / "current.json", {"phase": "MODULE_RESOLVED"})
+    
+    child_ui = tmp_path / "test_workspace" / "t1-MOD-ui"
+    child_ui.mkdir(parents=True)
+    (child_ui / ".state").mkdir()
+    write_json(child_ui / ".state" / "current.json", {"phase": "CODING"})
+    
+    wf = SdlcWorkflow()
+    wf._gather_modules("t1-MOD-api")
+    
+    int_ws = tmp_path / "test_workspace" / "t1-INTEGRATION"
+    assert not int_ws.exists()

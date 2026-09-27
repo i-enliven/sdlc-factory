@@ -303,8 +303,6 @@ class SdlcWorkflow(WorkflowPlugin):
                 extra={"color": typer.colors.CYAN}
             )
 
-            global_logger.info(f"[SUCCESS] All modules resolved! Spawned {integration_id}", extra={"color": typer.colors.MAGENTA})
-
     def _consolidate_integration(self, ws: Path, task_id: str):
         parent_id = task_id.replace("-INTEGRATION", "")
         parent_ws = get_workspace(parent_id)

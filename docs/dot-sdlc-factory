@@ -5,6 +5,15 @@
   "gemini_api_key": "",
   "vertex_api_key": "",
   "hf_token": "",
+  "providers": {
+    "vllm": {
+      "base_url": "http://sagittarius-a.mara-balance.ts.net:8100/v1"
+    },
+    "google": {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "api_key_ref": "env:GEMINI_API_KEY"
+    }
+  },
   "max_retry_limit": 2,
   "cli_command_timeout": 300,
   "models": {

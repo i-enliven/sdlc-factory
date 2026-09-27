@@ -31,6 +31,11 @@ def make_client(
 ) -> tuple[OpenAI, ResolvedAuth]:
     """Build the OpenAI client for ``provider_id``; returns the client and its auth.
 
+    Optional per-provider overrides live in the top-level ``providers`` section of
+    config.json (``providers.<id>.base_url`` / ``providers.<id>.api_key_ref``) and
+    are applied by ``Provider.resolve``; see ``providers.base`` for the precedence
+    rules. ``agent_cfg`` may carry provider-level overrides later — not yet read.
+
     ``client_factory`` defaults to ``openai.OpenAI``. Callers pass their own
     module-level ``OpenAI`` symbol so that ``sdlc_factory.agent.OpenAI`` and
     ``sdlc_factory.chat.OpenAI`` stay valid patch points for client creation.

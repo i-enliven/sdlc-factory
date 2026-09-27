@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 
 import pytest
@@ -217,3 +218,202 @@ def test_write_auth_overwrites_existing(auth_file):
     store.write_auth({"a": 1})
     store.write_auth({"b": 2})
     assert store.read_auth() == {"b": 2}
+
+# --- optional `providers` config section (T3 config plumbing) ---
+
+@pytest.fixture
+def capture_abort(mocker):
+    """Capture the message passed to ``utils.abort``; abort still raises SystemExit."""
+    return mocker.patch("sdlc_factory.utils.global_logger")
+
+
+# --- base_url precedence ---
+
+def test_vllm_base_url_providers_section_beats_vllm_base_url():
+    config = {"vllm_base_url": "https://legacy.test/v1",
+              "providers": {"vllm": {"base_url": "https://override.test/v1"}}}
+    assert VllmProvider().resolve({}, config).base_url == "https://override.test/v1"
+
+def test_vllm_base_url_providers_section_alone_beats_hardcoded_default():
+    config = {"providers": {"vllm": {"base_url": "https://override.test/v1"}}}
+    assert VllmProvider().resolve({}, config).base_url == "https://override.test/v1"
+
+def test_vllm_base_url_falls_back_to_vllm_base_url_then_default():
+    assert VllmProvider().resolve({}, {"vllm_base_url": "https://legacy.test/v1"}).base_url == "https://legacy.test/v1"
+    assert VllmProvider().resolve({}, {}).base_url == DEFAULT_VLLM_URL
+
+@pytest.mark.parametrize("override", [None, "", {}])
+def test_vllm_blank_base_url_override_counts_as_unset(override):
+    config = {"vllm_base_url": "https://legacy.test/v1",
+              "providers": {"vllm": {"base_url": override}}}
+    assert VllmProvider().resolve({}, config).base_url == "https://legacy.test/v1"
+
+def test_google_base_url_override_is_honored():
+    config = {"providers": {"google": {"base_url": "https://vertex-proxy.test/v1/"}}}
+    assert GoogleProvider().resolve({}, config).base_url == "https://vertex-proxy.test/v1/"
+
+def test_google_base_url_defaults_and_ignores_vllm_base_url():
+    assert GoogleProvider().resolve({}, {}).base_url == GOOGLE_URL
+    assert GoogleProvider().resolve({}, {"vllm_base_url": "https://legacy.test/v1"}).base_url == GOOGLE_URL
+
+def test_provider_overrides_are_scoped_per_provider():
+    config = {"providers": {"google": {"base_url": "https://vertex-proxy.test/v1/"}}}
+    assert VllmProvider().resolve({}, config).base_url == DEFAULT_VLLM_URL
+    config = {"providers": {"vllm": {"base_url": "https://override.test/v1"}}}
+    assert GoogleProvider().resolve({}, config).base_url == GOOGLE_URL
+
+
+# --- api_key_ref: replaces the legacy chain entirely when present ---
+
+def test_api_key_ref_config_key_form_replaces_legacy_chain():
+    config = {"vertex_api_key": "cfg-vertex", "gemini_api_key": "cfg-gemini",
+              "my_key": "ref-key",
+              "providers": {"vllm": {"api_key_ref": "my_key"}}}
+    assert VllmProvider().resolve({}, config).api_key == "ref-key"
+
+def test_api_key_ref_config_key_form_for_google():
+    config = {"gemini_api_key": "cfg-gemini", "my_key": "ref-key",
+              "providers": {"google": {"api_key_ref": "my_key"}}}
+    assert GoogleProvider().resolve({}, config).api_key == "ref-key"
+
+def test_api_key_ref_env_form(monkeypatch):
+    monkeypatch.setenv("MY_PROVIDER_KEY", "env-key")
+    config = {"vertex_api_key": "cfg-vertex",
+              "providers": {"vllm": {"api_key_ref": "env:MY_PROVIDER_KEY"}}}
+    assert VllmProvider().resolve({}, config).api_key == "env-key"
+    config = {"gemini_api_key": "cfg-gemini",
+              "providers": {"google": {"api_key_ref": "env:MY_PROVIDER_KEY"}}}
+    assert GoogleProvider().resolve({}, config).api_key == "env-key"
+
+def test_api_key_ref_is_scoped_per_provider():
+    config = {"vertex_api_key": "cfg-vertex", "my_key": "ref-key",
+              "providers": {"google": {"api_key_ref": "my_key"}}}
+    assert VllmProvider().resolve({}, config).api_key == "cfg-vertex"
+
+@pytest.mark.parametrize("ref", [None, ""])
+def test_absent_or_blank_api_key_ref_keeps_legacy_chain(ref):
+    config = {"vertex_api_key": "cfg-vertex", "providers": {"vllm": {"api_key_ref": ref}}}
+    assert VllmProvider().resolve({}, config).api_key == "cfg-vertex"
+
+def test_api_key_ref_missing_config_key_aborts(capture_abort):
+    config = {"providers": {"vllm": {"api_key_ref": "absent_key"}}}
+    with pytest.raises(SystemExit):
+        VllmProvider().resolve({}, config)
+    message = capture_abort.error.call_args[0][0]
+    assert "absent_key" in message
+    assert "providers.vllm.api_key_ref" in message
+
+def test_api_key_ref_empty_config_value_aborts(capture_abort):
+    config = {"absent_key": "", "providers": {"google": {"api_key_ref": "absent_key"}}}
+    with pytest.raises(SystemExit):
+        GoogleProvider().resolve({}, config)
+    assert "absent_key" in capture_abort.error.call_args[0][0]
+
+def test_api_key_ref_missing_env_var_aborts(capture_abort, monkeypatch):
+    monkeypatch.delenv("ABSENT_PROVIDER_KEY", raising=False)
+    config = {"providers": {"vllm": {"api_key_ref": "env:ABSENT_PROVIDER_KEY"}}}
+    with pytest.raises(SystemExit):
+        VllmProvider().resolve({}, config)
+    message = capture_abort.error.call_args[0][0]
+    assert "env:ABSENT_PROVIDER_KEY" in message
+    assert "ABSENT_PROVIDER_KEY" in message
+
+def test_api_key_ref_empty_env_var_aborts(capture_abort, monkeypatch):
+    monkeypatch.setenv("BLANK_PROVIDER_KEY", "")
+    config = {"providers": {"google": {"api_key_ref": "env:BLANK_PROVIDER_KEY"}}}
+    with pytest.raises(SystemExit):
+        GoogleProvider().resolve({}, config)
+    assert "env:BLANK_PROVIDER_KEY" in capture_abort.error.call_args[0][0]
+
+def test_api_key_ref_non_string_aborts(capture_abort):
+    config = {"providers": {"vllm": {"api_key_ref": ["not", "a", "string"]}}}
+    with pytest.raises(SystemExit):
+        VllmProvider().resolve({}, config)
+    assert "must be a string" in capture_abort.error.call_args[0][0]
+
+def test_base_url_non_string_aborts(capture_abort):
+    config = {"providers": {"google": {"base_url": {"host": "nope"}}}}
+    with pytest.raises(SystemExit):
+        GoogleProvider().resolve({}, config)
+    message = capture_abort.error.call_args[0][0]
+    assert "must be a string" in message
+    assert "providers.google.base_url" in message
+
+
+# --- regression: no `providers` section == today's behavior, byte for byte ---
+
+LEGACY_CONFIGS = [
+    {},
+    {"vllm_base_url": "https://legacy.test/v1"},
+    {"vllm_base_url": ""},
+    {"vertex_api_key": "cfg-vertex", "gemini_api_key": "cfg-gemini"},
+    {"gemini_api_key": "cfg-gemini"},
+    {"vertex_api_key": ""},
+    {"api_timeout": 90},
+    {"api_timeout": "45.5"},
+    {"vllm_base_url": "https://legacy.test/v1", "vertex_api_key": "cfg-vertex", "api_timeout": 30},
+]
+
+@pytest.fixture(params=[None, ("GEMINI_API_KEY", "env-gemini"), ("OPENAI_API_KEY", "env-openai")])
+def env_key(request, monkeypatch):
+    """Each legacy-chain case is exercised with each env var set, and with none."""
+    if request.param:
+        monkeypatch.setenv(*request.param)
+    return request.param
+
+def legacy_vllm_auth(config):
+    base_url = config.get("vllm_base_url", DEFAULT_VLLM_URL)
+    api_key = (config.get("vertex_api_key") or config.get("gemini_api_key")
+               or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY")
+    return ResolvedAuth(base_url=base_url, api_key=api_key,
+                        timeout=float(config.get("api_timeout", 600.0)))
+
+def legacy_google_auth(config):
+    api_key = (config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+               or config.get("vertex_api_key") or os.environ.get("OPENAI_API_KEY") or "EMPTY")
+    return ResolvedAuth(base_url=GOOGLE_URL, api_key=api_key,
+                        timeout=float(config.get("api_timeout", 600.0)))
+
+@pytest.mark.parametrize("config", LEGACY_CONFIGS)
+def test_vllm_without_providers_section_matches_legacy(config, env_key):
+    assert VllmProvider().resolve({}, config) == legacy_vllm_auth(config)
+
+@pytest.mark.parametrize("config", LEGACY_CONFIGS)
+def test_google_without_providers_section_matches_legacy(config, env_key):
+    assert GoogleProvider().resolve({}, config) == legacy_google_auth(config)
+
+@pytest.mark.parametrize("config", LEGACY_CONFIGS)
+def test_empty_or_foreign_providers_section_changes_nothing(config, env_key):
+    for section in ({}, {"other-provider": {"base_url": "https://x.test/v1",
+                                            "api_key_ref": "nope"}}, "not-a-dict", None, ["oops"]):
+        patched = dict(config, providers=section)
+        assert VllmProvider().resolve({}, patched) == VllmProvider().resolve({}, config)
+        assert GoogleProvider().resolve({}, patched) == GoogleProvider().resolve({}, config)
+
+
+# --- registry / make_client with the providers section ---
+
+def test_github_copilot_is_not_registered_yet():
+    assert "github-copilot" not in PROVIDERS
+    with pytest.raises(ValueError) as exc:
+        get_provider("github-copilot")
+    assert "github-copilot" in str(exc.value)
+    assert "vllm" in str(exc.value) and "google" in str(exc.value)
+
+def test_make_client_applies_providers_section():
+    config = {"vertex_api_key": "cfg-vertex",
+              "providers": {"vllm": {"base_url": "https://override.test/v1",
+                                     "api_key_ref": "ref_key"}},
+              "ref_key": "ref-key"}
+    client, auth = make_client("vllm", {}, config)
+    assert str(client.base_url).rstrip("/") == "https://override.test/v1"
+    assert client.api_key == "ref-key"
+    assert auth.base_url == "https://override.test/v1"
+
+def test_agent_cfg_overrides_are_not_read_yet():
+    agent_cfg = {"base_url": "https://agent.test/v1", "api_key_ref": "agent_key",
+                 "model": "whatever"}
+    config = {"agent_key": "agent-key", "vertex_api_key": "cfg-vertex"}
+    auth = VllmProvider().resolve(agent_cfg, config)
+    assert auth.base_url == DEFAULT_VLLM_URL
+    assert auth.api_key == "cfg-vertex"

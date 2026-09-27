@@ -191,3 +191,64 @@ def run(interval: int = typer.Option(30, help="Seconds to wait between idle hear
     except KeyboardInterrupt:
         global_logger.info("\n🛑 Gracefully shutting down the factory...", extra={"color": typer.colors.YELLOW})
         sys.exit(0)
+
+
+# --- GitHub Copilot auth workflow (thin wrappers; all logic lives in providers.copilot) ---
+
+def _copilot_enterprise_prompt(question: str) -> str:
+    """Ask for the optional enterprise domain. EOF means "we cannot ask"."""
+    try:
+        return input(f"{question}: ")
+    except (EOFError, KeyboardInterrupt):
+        abort("Non-interactive session - pass --enterprise <domain>, or --enterprise '' for github.com.")
+
+def _copilot_device_notice(device: dict):
+    """Shows the device code the user must type in the browser, then waits."""
+    typer.secho(f"🔐 Open {device.get('verification_uri')} and enter this code: {device.get('user_code')}", fg=typer.colors.YELLOW, bold=True)
+    typer.secho("⏳ Waiting for you to authorize in the browser...", fg=typer.colors.CYAN)
+
+@app.command(name="copilot-login")
+def copilot_login(enterprise: Optional[str] = typer.Option(None, "--enterprise", help="GitHub Enterprise domain (e.g. company.ghe.com). Pass '' for github.com.")):
+    """Signs in to GitHub Copilot via the OAuth device flow and stores the credential."""
+    from sdlc_factory.providers import copilot
+
+    typer.secho("🔑 Starting the GitHub Copilot device flow...", fg=typer.colors.CYAN, bold=True)
+    try:
+        credential = copilot.login(prompt=_copilot_enterprise_prompt, enterprise=enterprise, notify=_copilot_device_notice)
+    except copilot.CopilotAuthError as e:
+        abort(str(e))
+
+    model_ids = sorted(credential.get("available_model_ids") or [])
+    typer.secho(f"[SUCCESS] Copilot login complete - {len(model_ids)} models available", fg=typer.colors.GREEN, bold=True)
+    for model_id in model_ids:
+        typer.echo(f"  {model_id}")
+
+@app.command(name="copilot-status")
+def copilot_status():
+    """Shows the stored GitHub Copilot credential: expiry, base URL and models."""
+    from sdlc_factory.providers import copilot
+
+    status = copilot.copilot_status()
+    if not status["logged_in"]:
+        typer.secho("ℹ️ Not logged in to GitHub Copilot - no stored credential.", fg=typer.colors.YELLOW)
+        typer.echo("   Run: sdlc-factory copilot-login")
+        raise typer.Exit(0)
+
+    summary = ", ".join(f"{api}={count}" for api, count in sorted(status["api_summary"].items()))
+    typer.secho("🔑 GitHub Copilot", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"   Base URL:      {status['base_url']}")
+    typer.echo(f"   Token expires: {status['expires_human'] or 'unknown'} local ({'EXPIRED' if status['expired'] else 'valid'})")
+    typer.echo(f"   Models:        {status['model_count']} available ({summary})")
+    if status["expired"]:
+        typer.secho("   Token expired - run 'sdlc-factory copilot-login' to refresh it.", fg=typer.colors.YELLOW)
+
+@app.command(name="copilot-logout")
+def copilot_logout():
+    """Removes the stored GitHub Copilot credential (other providers are kept)."""
+    from sdlc_factory.providers import copilot
+
+    if copilot.logout():
+        typer.secho(f"[SUCCESS] Removed the {copilot.PROVIDER_ID} credential from auth.json", fg=typer.colors.GREEN)
+        typer.echo("   The token was not revoked server-side; revoke it at https://github.com/settings/applications.")
+    else:
+        typer.secho("ℹ️ No stored GitHub Copilot credential - nothing to remove.", fg=typer.colors.YELLOW)

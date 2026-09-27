@@ -6,9 +6,10 @@ Port of pi's verified TypeScript implementation
 
 Implemented here: the OAuth device-code flow, the Copilot proxy-token exchange
 (``copilot_internal/v2/token``), the model catalog fetch with policy auto-enable,
-base-URL derivation from the token itself, and ``auth.json`` persistence.
+base-URL derivation from the token itself, ``auth.json`` persistence, and the
+read-only helpers the CLI needs (``copilot_status`` / ``logout``).
 
-Not implemented here: runtime ``resolve()`` (T6) and the CLI wrappers (T5).
+Not implemented here: runtime ``resolve()`` (T6).
 
 All network traffic goes through one injectable seam (``http=...``); every flow
 function takes it as its last argument, so tests drive the whole login with fake
@@ -70,6 +71,10 @@ RESPONSES_API_PREFIXES = ("gpt-", "grok-", "oswe", "mai-")
 UNSUPPORTED_API_PREFIXES = ("claude",)
 
 ENTERPRISE_PROMPT = "GitHub Enterprise URL/domain (blank for github.com)"
+
+# Status rendering. Local time on purpose: the expiry is a wall-clock fact the
+# user compares against their own clock, not a duration to reason about.
+EXPIRY_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class CopilotAuthError(Exception):
@@ -536,6 +541,81 @@ def load_credential() -> Optional[dict]:
     """The stored ``github-copilot`` credential, or ``None`` when not logged in."""
     credential = store.read_auth().get(PROVIDER_ID)
     return credential if isinstance(credential, dict) else None
+
+
+def logout() -> bool:
+    """Drop the ``github-copilot`` entry from auth.json, keeping every other key.
+
+    Returns ``True`` when an entry was actually removed. Nothing is revoked
+    server-side (PLAN.md §5) — the GitHub-side revocation is a human action.
+    """
+    data = store.read_auth()
+    if PROVIDER_ID not in data:
+        return False
+    data.pop(PROVIDER_ID)
+    store.write_auth(data)
+    return True
+
+
+def format_expiry(expires_ms: Any) -> Optional[str]:
+    """Render an epoch-millis expiry as local time; ``None`` when unusable."""
+    if not isinstance(expires_ms, (int, float)) or isinstance(expires_ms, bool):
+        return None
+    try:
+        return time.strftime(EXPIRY_TIME_FORMAT, time.localtime(expires_ms / 1000))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def api_summary(model_ids, models: Optional[dict] = None) -> dict:
+    """``{wire api: model count}`` for ``model_ids``, from the stored catalog.
+
+    Counted over the *same* ids the status reports as available, so the summary
+    can never disagree with the model count; a model missing from the stored
+    ``models`` block falls back to prefix inference (:func:`get_wire_api`).
+    """
+    catalog = models if isinstance(models, dict) else {}
+    summary: dict = {}
+    for model_id in model_ids:
+        entry = catalog.get(model_id)
+        api = entry.get("api") if isinstance(entry, dict) else None
+        if not isinstance(api, str) or not api:
+            api = get_wire_api(model_id)
+        summary[api] = summary.get(api, 0) + 1
+    return summary
+
+
+def copilot_status() -> dict:
+    """Summary of the stored credential for ``copilot-status`` to print.
+
+    ``{"logged_in": False}`` when there is no credential. ``expires_at`` is the
+    stored value, which already carries the 5-minute early-refresh buffer, so it
+    is the deadline the runtime refreshes *by*, not the raw token expiry. A
+    missing or non-numeric expiry counts as expired, since T6's ``resolve()``
+    treats an unusable ``expires`` as "refresh now".
+    """
+    credential = load_credential()
+    if not credential:
+        return {"logged_in": False}
+    expires_ms = credential.get("expires")
+    usable_expiry = isinstance(expires_ms, (int, float)) and not isinstance(expires_ms, bool)
+    raw_ids = credential.get("available_model_ids")
+    model_ids: list = []
+    if isinstance(raw_ids, list):
+        model_ids = sorted(model_id for model_id in raw_ids if isinstance(model_id, str))
+    raw_enterprise = credential.get("enterprise_url")
+    enterprise_url = raw_enterprise if isinstance(raw_enterprise, str) and raw_enterprise else None
+    return {
+        "logged_in": True,
+        "base_url": get_base_url(credential.get("access"), enterprise_url),
+        "enterprise_url": enterprise_url,
+        "expires_at": int(expires_ms) if usable_expiry else None,
+        "expires_human": format_expiry(expires_ms),
+        "expired": not usable_expiry or expires_ms <= time.time() * 1000,
+        "model_count": len(model_ids),
+        "model_ids": model_ids,
+        "api_summary": api_summary(model_ids, credential.get("models")),
+    }
 
 
 def login(prompt: Optional[Callable[[str], str]] = None, http: Any = None,

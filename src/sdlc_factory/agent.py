@@ -264,15 +264,30 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                     return res
                 
                 full_content = ""
+                full_reasoning = ""
                 tool_calls_dict = {}
                 active_tool_idx = -1
+                in_reasoning = False
                 
                 prev_char_was_newline = True
                 for chunk in res:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
+                    
+                    reasoning_chunk = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                    if reasoning_chunk:
+                        full_reasoning += reasoning_chunk
+                        if not in_reasoning:
+                            in_reasoning = True
+                            typer.secho("💭 [Thinking] ", fg=typer.colors.BRIGHT_BLACK, dim=True, nl=False)
+                        typer.secho(reasoning_chunk, nl=False, fg=typer.colors.BRIGHT_BLACK, dim=True)
+
                     if delta.content:
+                        if in_reasoning:
+                            in_reasoning = False
+                            typer.secho("\n", nl=False)
+                            prev_char_was_newline = True
                         full_content += delta.content
                         filtered_content = ""
                         for char in delta.content:
@@ -286,6 +301,10 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                         if filtered_content:
                             typer.secho(filtered_content, nl=False, fg=typer.colors.CYAN)
                     if delta.tool_calls:
+                        if in_reasoning:
+                            in_reasoning = False
+                            typer.secho("\n", nl=False)
+                            prev_char_was_newline = True
                         delta_dict = chunk.model_dump(exclude_unset=True).get("choices", [{}])[0].get("delta", {})
                         tc_dicts = delta_dict.get("tool_calls", [])
                         for tc, tc_dict in zip(delta.tool_calls, tc_dicts):
@@ -314,6 +333,11 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                                     if k not in ["index", "id", "function", "type"]:
                                         tool_calls_dict[idx][k] = v
 
+                if in_reasoning:
+                    in_reasoning = False
+                    typer.secho("\n", nl=False)
+                    prev_char_was_newline = True
+
                 if full_content and not prev_char_was_newline:
                     typer.secho("")
                 
@@ -324,7 +348,12 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                     func = SimpleNamespace(name=tc["function"]["name"], arguments=tc["function"]["arguments"])
                     final_tool_calls.append(SimpleNamespace(id=tc["id"], type="function", function=func))
                 
-                assistant_msg = SimpleNamespace(role="assistant", content=full_content, tool_calls=final_tool_calls if final_tool_calls else None)
+                assistant_msg = SimpleNamespace(
+                    role="assistant",
+                    content=full_content,
+                    tool_calls=final_tool_calls if final_tool_calls else None,
+                    reasoning_content=full_reasoning if full_reasoning else None
+                )
                 
                 assistant_msg_dict = {
                     "role": "assistant",
@@ -754,12 +783,24 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 agent_content = ""
                 if response and response.choices and getattr(response.choices[0].message, "content", None):
                     agent_content = response.choices[0].message.content
-                if not agent_content.strip() and not (response and response.choices and getattr(response.choices[0].message, "tool_calls", None)):
+                reasoning_content = getattr(response.choices[0].message, "reasoning_content", None) if (response and response.choices) else None
+                has_tool_calls = bool(response and response.choices and getattr(response.choices[0].message, "tool_calls", None))
+                if not agent_content.strip() and not has_tool_calls:
                     empty_response_count += 1
                     if empty_response_count <= 3 and not no_stream:
-                        global_logger.warning(f"⚠️ Empty response detected from LLM (possible EOS bug). Prompting to continue... (Attempt {empty_response_count}/3)", extra={"color": typer.colors.YELLOW})
-                        warning_msg = f"SYSTEM: You generated an empty response without making any tool calls. If you are stuck, please explain why. Otherwise, please continue executing tools to complete the task. (Attempt {empty_response_count} of 3)"
-                        if empty_response_count > 1 and messages and messages[-1].get("role") == "user" and "SYSTEM: You generated an empty response" in messages[-1].get("content", ""):
+                        if reasoning_content and reasoning_content.strip():
+                            global_logger.warning(
+                                f"⚠️ LLM generated reasoning ({len(reasoning_content)} chars) but ended without tool calls or content (possible token limit cutoff). Prompting to conclude... (Attempt {empty_response_count}/3)",
+                                extra={"color": typer.colors.YELLOW}
+                            )
+                            warning_msg = (
+                                f"SYSTEM: You completed your internal reasoning but did not execute any tool calls or output any final content. "
+                                f"Please immediately proceed to executing the necessary tool calls to complete the task. (Attempt {empty_response_count} of 3)"
+                            )
+                        else:
+                            global_logger.warning(f"⚠️ Empty response detected from LLM (possible EOS bug). Prompting to continue... (Attempt {empty_response_count}/3)", extra={"color": typer.colors.YELLOW})
+                            warning_msg = f"SYSTEM: You generated an empty response without making any tool calls. If you are stuck, please explain why. Otherwise, please continue executing tools to complete the task. (Attempt {empty_response_count} of 3)"
+                        if empty_response_count > 1 and messages and messages[-1].get("role") == "user" and ("SYSTEM: You generated an empty response" in messages[-1].get("content", "") or "SYSTEM: You completed your internal reasoning" in messages[-1].get("content", "")):
                             messages[-1]["content"] = warning_msg
                         else:
                             messages.append({"role": "user", "content": warning_msg})

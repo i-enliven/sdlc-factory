@@ -75,3 +75,38 @@ def test_execute_agent_function_call(mocker, tmp_path):
     assert res == "ls finished"
     assert mock_client.chat.completions.create.call_count == 2
     assert mock_client.chat.completions.create.call_count == 2
+
+def test_execute_agent_reasoning_stream(mocker, tmp_path):
+    agent_dir = tmp_path / "testagent"
+    agent_dir.mkdir()
+    (agent_dir / "SOUL.md").write_text("soul data")
+    
+    mocker.patch("sdlc_factory.agent.get_config", return_value={"sessions_root": str(tmp_path)})
+    mock_workflow = mocker.MagicMock()
+    mock_workflow.agents_dir = tmp_path
+    mocker.patch("sdlc_factory.workflows.get_workflow", return_value=mock_workflow)
+    mocker.patch("sdlc_factory.telemetry.setup_telemetry")
+    
+    mock_client_class = mocker.patch("sdlc_factory.agent.OpenAI", create=True)
+    mock_client = mock_client_class.return_value
+    
+    mock_chunk_1 = mocker.MagicMock()
+    mock_chunk_1.choices = [mocker.MagicMock()]
+    mock_chunk_1.choices[0].delta.reasoning_content = "thinking through steps"
+    mock_chunk_1.choices[0].delta.reasoning = None
+    mock_chunk_1.choices[0].delta.content = None
+    mock_chunk_1.choices[0].delta.tool_calls = None
+    
+    mock_chunk_2 = mocker.MagicMock()
+    mock_chunk_2.choices = [mocker.MagicMock()]
+    mock_chunk_2.choices[0].delta.reasoning_content = None
+    mock_chunk_2.choices[0].delta.reasoning = None
+    mock_chunk_2.choices[0].delta.content = "result after thinking"
+    mock_chunk_2.choices[0].delta.tool_calls = None
+    
+    mock_client.chat.completions.create.return_value = [mock_chunk_1, mock_chunk_2]
+    mocker.patch("sdlc_factory.agent.using_session", return_value=mocker.MagicMock())
+    
+    res = execute_agent("testagent", "solve problem")
+    assert res == "result after thinking"
+    assert mock_client.chat.completions.create.call_count == 1

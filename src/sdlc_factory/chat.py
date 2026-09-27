@@ -4,6 +4,7 @@ import typer
 from openai import OpenAI
 
 from sdlc_factory.utils import get_config, abort, global_logger
+from sdlc_factory.providers import make_client
 from sdlc_factory.tools import sdlc_store_memory
 
 def run_chat_session(session_id: str):
@@ -37,15 +38,7 @@ def run_chat_session(session_id: str):
     target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
     provider = agent_config.get("provider", "vllm")
     target_temp = float(agent_config.get("temperature", 0.0))
-    import os
-    if provider == "google":
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        api_key = config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or config_data.get("vertex_api_key") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
-    else:
-        base_url = config_data.get("vllm_base_url", "http://sagittarius-a.mara-balance.ts.net:8100/v1")
-        api_key = config_data.get("vertex_api_key") or config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
-    api_timeout = float(config_data.get("api_timeout", 600.0))
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=api_timeout)
+    client, _auth = make_client(provider, agent_config, config_data, client_factory=OpenAI)
 
     tools = [
         {

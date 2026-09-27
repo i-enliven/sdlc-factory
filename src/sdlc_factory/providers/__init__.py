@@ -1,5 +1,7 @@
 """Provider registry and the single client-construction entry point."""
 
+from typing import Callable, Optional
+
 from openai import OpenAI
 
 from .base import Provider, ResolvedAuth
@@ -21,11 +23,21 @@ def get_provider(provider_id: str) -> Provider:
     return provider
 
 
-def make_client(provider_id: str, agent_cfg: dict, config: dict) -> tuple[OpenAI, ResolvedAuth]:
-    """Build the OpenAI client for ``provider_id``; returns the client and its auth."""
+def make_client(
+    provider_id: str,
+    agent_cfg: dict,
+    config: dict,
+    client_factory: Optional[Callable[..., OpenAI]] = None,
+) -> tuple[OpenAI, ResolvedAuth]:
+    """Build the OpenAI client for ``provider_id``; returns the client and its auth.
+
+    ``client_factory`` defaults to ``openai.OpenAI``. Callers pass their own
+    module-level ``OpenAI`` symbol so that ``sdlc_factory.agent.OpenAI`` and
+    ``sdlc_factory.chat.OpenAI`` stay valid patch points for client creation.
+    """
     provider = get_provider(provider_id)
     auth = provider.resolve(agent_cfg, config)
-    client = OpenAI(
+    client = (client_factory or OpenAI)(
         base_url=auth.base_url,
         api_key=auth.api_key,
         default_headers=auth.headers or None,

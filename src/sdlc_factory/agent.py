@@ -14,6 +14,7 @@ import os
 from openinference.instrumentation import using_session
 
 from sdlc_factory.utils import get_config, abort, global_logger, format_size
+from sdlc_factory.providers import make_client
 
 from sdlc_factory.tools import (
     sdlc_advance_state,
@@ -53,16 +54,11 @@ def _build_system_instruction(agent_name: str, agents_root: Path, exclude_files:
     return system_instruction
 
 
-def _setup_client(config_data: dict, system_instruction: str, target_temp: float, provider: str = "vllm") -> OpenAI:
-    import os
-    if provider == "google":
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        api_key = config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or config_data.get("vertex_api_key") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
-    else:
-        base_url = config_data.get("vllm_base_url", "http://sagittarius-a.mara-balance.ts.net:8100/v1")
-        api_key = config_data.get("vertex_api_key") or config_data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or "EMPTY"
-    api_timeout = float(config_data.get("api_timeout", 600.0))
-    return OpenAI(base_url=base_url, api_key=api_key, timeout=api_timeout)
+def _setup_client(config_data: dict, agent_cfg: dict, provider: str = "vllm") -> OpenAI:
+    """Thin wrapper over the provider layer; keeps this module's ``OpenAI`` symbol
+    as the client-construction patch point."""
+    client, _auth = make_client(provider, agent_cfg, config_data, client_factory=OpenAI)
+    return client
 
 def _get_tools_schema(workflow) -> list[dict]:
     tools = [
@@ -607,7 +603,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     if prune_token_limit < 4000:
         prune_token_limit = 4000
 
-    client = _setup_client(config_data, system_instruction, target_temp, provider=provider)
+    client = _setup_client(config_data, agent_config, provider=provider)
     tools_schema = _get_tools_schema(workflow)
     
     sessions_root = config_data.get("sessions_root")

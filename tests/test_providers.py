@@ -393,11 +393,18 @@ def test_empty_or_foreign_providers_section_changes_nothing(config, env_key):
 
 # --- registry / make_client with the providers section ---
 
-def test_github_copilot_is_not_registered_yet():
-    assert "github-copilot" not in PROVIDERS
+def test_github_copilot_is_registered_after_t4():
+    """T4 registered the auth flow; runtime resolve() is still T6."""
+    from sdlc_factory.providers.copilot import CopilotProvider
+
+    assert PROVIDERS["github-copilot"].id == "github-copilot"
+    assert isinstance(get_provider("github-copilot"), CopilotProvider)
+    with pytest.raises(NotImplementedError):
+        get_provider("github-copilot").resolve({}, {})
+
+def test_unknown_provider_lists_known_ids():
     with pytest.raises(ValueError) as exc:
-        get_provider("github-copilot")
-    assert "github-copilot" in str(exc.value)
+        get_provider("nope")
     assert "vllm" in str(exc.value) and "google" in str(exc.value)
 
 def test_make_client_applies_providers_section():

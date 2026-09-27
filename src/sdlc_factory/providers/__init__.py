@@ -5,12 +5,14 @@ from typing import Callable, Optional
 from openai import OpenAI
 
 from .base import Provider, ResolvedAuth
+from .copilot import CopilotProvider
 from .google import GoogleProvider
 from .vllm import VllmProvider
 
 PROVIDERS: dict[str, Provider] = {
     VllmProvider.id: VllmProvider(),
     GoogleProvider.id: GoogleProvider(),
+    CopilotProvider.id: CopilotProvider(),
 }
 
 

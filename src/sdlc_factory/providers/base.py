@@ -14,6 +14,12 @@ from ..utils import abort
 DEFAULT_API_TIMEOUT = 600.0
 ENV_REF_PREFIX = "env:"
 
+# The wire APIs ``ResolvedAuth.wire_api`` names. ``completions`` is what this
+# codebase has always spoken; ``responses`` is Copilot's second surface (T7);
+# ``unsupported`` (anthropic-messages) is rejected by the provider, not routed.
+COMPLETIONS_WIRE_API = "completions"
+RESPONSES_WIRE_API = "responses"
+
 
 @dataclass
 class ResolvedAuth:
@@ -23,7 +29,7 @@ class ResolvedAuth:
     api_key: str
     headers: dict[str, str] = field(default_factory=dict)
     timeout: float = DEFAULT_API_TIMEOUT
-    wire_api: str = "completions"
+    wire_api: str = COMPLETIONS_WIRE_API
 
 
 def resolve_timeout(config: dict) -> float:

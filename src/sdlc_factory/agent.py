@@ -15,6 +15,11 @@ from openinference.instrumentation import using_session
 
 from sdlc_factory.utils import get_config, abort, global_logger, format_size
 from sdlc_factory.providers import get_provider, make_client, request_headers
+from sdlc_factory.providers import responses as responses_api
+from sdlc_factory.providers.base import (
+    COMPLETIONS_WIRE_API,
+    RESPONSES_WIRE_API,
+)
 
 from sdlc_factory.tools import (
     sdlc_advance_state,
@@ -54,11 +59,14 @@ def _build_system_instruction(agent_name: str, agents_root: Path, exclude_files:
     return system_instruction
 
 
-def _setup_client(config_data: dict, agent_cfg: dict, provider: str = "vllm") -> OpenAI:
+def _setup_client(config_data: dict, agent_cfg: dict, provider: str = "vllm") -> Tuple[OpenAI, Any]:
     """Thin wrapper over the provider layer; keeps this module's ``OpenAI`` symbol
-    as the client-construction patch point."""
-    client, _auth = make_client(provider, agent_cfg, config_data, client_factory=OpenAI)
-    return client
+    as the client-construction patch point.
+
+    Returns the client *and* its ``ResolvedAuth``: the auth names the wire API
+    (``completions`` | ``responses``) this client must be sent through.
+    """
+    return make_client(provider, agent_cfg, config_data, client_factory=OpenAI)
 
 def _get_tools_schema(workflow) -> list[dict]:
     tools = [
@@ -235,21 +243,41 @@ def _save_session(messages: list[dict], session_file: Path):
     except Exception as e:
         global_logger.warning(f"Failed to serialize session history: {e}")
 
-def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False, provider=None):
+def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False, provider=None, wire_api=COMPLETIONS_WIRE_API):
     time.sleep(0.5)
     for attempt in range(max_retries):
         try:
             with using_session(session_id):
-                stream_kwargs = {"stream": True, "stream_options": {"include_usage": True}} if not no_stream else {"stream": False}
                 # Recomputed per attempt: some providers (Copilot) gate on headers
                 # that describe *this* request, and the history is not static.
+                extra_headers = request_headers(provider, messages)
+                if wire_api == RESPONSES_WIRE_API:
+                    # Copilot serves gpt-5*/grok*/oswe*/mai* over the Responses API
+                    # only (PLAN.md §2.3). ``responses.send`` streams, prints and
+                    # reassembles into this path's own reply shape, so everything
+                    # below — retry loop, session save, reply shape — is shared.
+                    res = responses_api.send(
+                        client,
+                        target_model,
+                        messages,
+                        tools,
+                        temperature=target_temp,
+                        max_tokens=target_max_tokens,
+                        extra_headers=extra_headers,
+                        stream=not no_stream
+                    )
+                    messages.append(responses_api.assistant_message_dict(res))
+                    _save_session(messages, session_file)
+                    return res
+                stream_kwargs = {"stream": True, "stream_options": {"include_usage": True}} if not no_stream else {"stream": False}
+                # The completions path: unchanged for every non-Responses model.
                 res = client.chat.completions.create(
                     model=target_model,
                     messages=messages,
                     tools=tools,
                     temperature=target_temp,
                     max_tokens=target_max_tokens,
-                    extra_headers=request_headers(provider, messages),
+                    extra_headers=extra_headers,
                     **stream_kwargs
                 )
                 
@@ -266,9 +294,9 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                 full_reasoning = ""
                 tool_calls_dict = {}
                 active_tool_idx = -1
-                in_reasoning = False
+                # Console formatting lives in one place both wire APIs use.
+                printer = responses_api.ConsolePrinter()
                 
-                prev_char_was_newline = True
                 for chunk in res:
                     if not chunk.choices:
                         continue
@@ -277,33 +305,13 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                     reasoning_chunk = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
                     if reasoning_chunk:
                         full_reasoning += reasoning_chunk
-                        if not in_reasoning:
-                            in_reasoning = True
-                            typer.secho("💭 [Thinking] ", fg=typer.colors.BRIGHT_BLACK, dim=True, nl=False)
-                        typer.secho(reasoning_chunk, nl=False, fg=typer.colors.BRIGHT_BLACK, dim=True)
+                        printer.reasoning(reasoning_chunk)
 
                     if delta.content:
-                        if in_reasoning:
-                            in_reasoning = False
-                            typer.secho("\n", nl=False)
-                            prev_char_was_newline = True
                         full_content += delta.content
-                        filtered_content = ""
-                        for char in delta.content:
-                            if char == '\n':
-                                if not prev_char_was_newline:
-                                    filtered_content += char
-                                prev_char_was_newline = True
-                            else:
-                                filtered_content += char
-                                prev_char_was_newline = False
-                        if filtered_content:
-                            typer.secho(filtered_content, nl=False, fg=typer.colors.CYAN)
+                        printer.text(delta.content)
                     if delta.tool_calls:
-                        if in_reasoning:
-                            in_reasoning = False
-                            typer.secho("\n", nl=False)
-                            prev_char_was_newline = True
+                        printer.close_reasoning()
                         delta_dict = chunk.model_dump(exclude_unset=True).get("choices", [{}])[0].get("delta", {})
                         tc_dicts = delta_dict.get("tool_calls", [])
                         for tc, tc_dict in zip(delta.tool_calls, tc_dicts):
@@ -332,13 +340,7 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                                     if k not in ["index", "id", "function", "type"]:
                                         tool_calls_dict[idx][k] = v
 
-                if in_reasoning:
-                    in_reasoning = False
-                    typer.secho("\n", nl=False)
-                    prev_char_was_newline = True
-
-                if full_content and not prev_char_was_newline:
-                    typer.secho("")
+                printer.finish()
                 
                 from types import SimpleNamespace
                 final_tool_calls = []
@@ -606,10 +608,13 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     if prune_token_limit < 4000:
         prune_token_limit = 4000
 
-    client = _setup_client(config_data, agent_config, provider=provider)
+    client, auth = _setup_client(config_data, agent_config, provider=provider)
     # The provider object travels with the client: some providers add per-request
     # headers that only the outgoing messages can tell us about (Copilot, T6).
     provider_impl = get_provider(provider)
+    # ...and so does the wire API: Copilot serves some models over Responses only
+    # (T7). Every provider here answers "completions" unless it says otherwise.
+    wire_api = getattr(auth, "wire_api", COMPLETIONS_WIRE_API)
     tools_schema = _get_tools_schema(workflow)
     
     sessions_root = config_data.get("sessions_root")
@@ -654,15 +659,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             if user_msg:
                 messages.append({"role": "user", "content": user_msg})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
             else:
                 messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
         else:
             messages.append({"role": "user", "content": prompt})
             messages = _prune_messages(messages, prune_token_limit)
-            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
+            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
         
         iteration_count = 0
         tool_execution_count = 0
@@ -780,7 +785,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 #     global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
                 #     break
 
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
             else:
                 agent_content = ""
                 if response and response.choices and getattr(response.choices[0].message, "content", None):
@@ -807,7 +812,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         else:
                             messages.append({"role": "user", "content": warning_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
                         continue
 
                 if HUMAN_PAUSE_REQUESTED:
@@ -815,7 +820,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     if user_msg:
                         messages.append({"role": "user", "content": user_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
                         continue
                 break
                 

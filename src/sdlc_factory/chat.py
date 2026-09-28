@@ -5,7 +5,34 @@ from openai import OpenAI
 
 from sdlc_factory.utils import get_config, abort, global_logger
 from sdlc_factory.providers import get_provider, make_client, request_headers
+from sdlc_factory.providers import responses as responses_api
+from sdlc_factory.providers.base import (
+    COMPLETIONS_WIRE_API,
+    RESPONSES_WIRE_API,
+)
 from sdlc_factory.tools import sdlc_store_memory
+
+
+def _create(client, provider_impl, wire_api, model, messages, tools, temperature):
+    """One send, routed by the wire API the provider resolved for this model.
+
+    Copilot serves some models over the Responses API only (PLAN.md §2.3, T7);
+    ``responses.send`` returns the completions path's reply shape, so the tool
+    loop below does not care which wire API answered. Everything else keeps
+    going through ``chat.completions`` exactly as before.
+    """
+    headers = request_headers(provider_impl, messages)
+    if wire_api == RESPONSES_WIRE_API:
+        return responses_api.send(client, model, messages, tools,
+                                  temperature=temperature, extra_headers=headers)
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        tools=tools,
+        temperature=temperature,
+        extra_headers=headers
+    )
+
 
 def run_chat_session(session_id: str):
     """Runs a read-only interactive chat with a previous session."""
@@ -38,10 +65,12 @@ def run_chat_session(session_id: str):
     target_model = agent_config.get("model", "gemini-3.1-pro-preview-customtools")
     provider = agent_config.get("provider", "vllm")
     target_temp = float(agent_config.get("temperature", 0.0))
-    client, _auth = make_client(provider, agent_config, config_data, client_factory=OpenAI)
+    client, auth = make_client(provider, agent_config, config_data, client_factory=OpenAI)
     # Travels with the client: Copilot adds per-request headers derived from the
     # messages we are about to send (T6). Other providers contribute nothing.
     provider_impl = get_provider(provider)
+    # ...and so does the wire API this client has to be sent through (T7).
+    wire_api = getattr(auth, "wire_api", COMPLETIONS_WIRE_API)
 
     tools = [
         {
@@ -82,13 +111,8 @@ def run_chat_session(session_id: str):
             
             messages.append({"role": "user", "content": user_input})
             
-            response = client.chat.completions.create(
-                model=target_model,
-                messages=messages,
-                tools=tools,
-                temperature=target_temp,
-                extra_headers=request_headers(provider_impl, messages)
-            )
+            response = _create(client, provider_impl, wire_api, target_model,
+                               messages, tools, target_temp)
             
             while response.choices[0].message.tool_calls:
                 assistant_msg = response.choices[0].message
@@ -117,13 +141,8 @@ def run_chat_session(session_id: str):
                     })
                 
                 messages.extend(tool_results)
-                response = client.chat.completions.create(
-                    model=target_model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=target_temp,
-                    extra_headers=request_headers(provider_impl, messages)
-                )
+                response = _create(client, provider_impl, wire_api, target_model,
+                                   messages, tools, target_temp)
             
             assistant_msg = response.choices[0].message
             messages.append(assistant_msg)

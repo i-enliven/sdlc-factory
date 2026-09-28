@@ -14,7 +14,12 @@ import os
 from openinference.instrumentation import using_session
 
 from sdlc_factory.utils import get_config, abort, global_logger, format_size
-from sdlc_factory.providers import get_provider, make_client, request_headers
+from sdlc_factory.providers import (
+    get_provider,
+    make_client,
+    request_headers,
+    try_recover_auth,
+)
 from sdlc_factory.providers import responses as responses_api
 from sdlc_factory.providers.base import (
     COMPLETIONS_WIRE_API,
@@ -243,8 +248,12 @@ def _save_session(messages: list[dict], session_file: Path):
     except Exception as e:
         global_logger.warning(f"Failed to serialize session history: {e}")
 
-def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False, provider=None, wire_api=COMPLETIONS_WIRE_API):
+def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False, provider=None, wire_api=COMPLETIONS_WIRE_API, agent_cfg=None, config=None):
     time.sleep(0.5)
+    # How many attempts a mid-run credential refresh has bought back. A 401 that
+    # the provider can fix itself is not an API interruption: it retries at once
+    # and leaves the exponential backoff schedule exactly where it was.
+    auth_recoveries = 0
     for attempt in range(max_retries):
         try:
             with using_session(session_id):
@@ -373,23 +382,36 @@ def _send_with_retry(client, messages, tools, target_model, target_temp, target_
                 
                 return SimpleNamespace(choices=[SimpleNamespace(message=assistant_msg)])
         except Exception as e:
+            # A rejected Copilot credential is the one error this layer can fix on
+            # its own: refresh, re-point the client, retry immediately with the
+            # same request. A second 401 after that aborts (``try_recover_auth``
+            # exits the process), and the refunded attempt keeps it off the backoff
+            # schedule below.
+            if try_recover_auth(client, provider, e, bool(auth_recoveries),
+                                agent_cfg, config):
+                auth_recoveries += 1
+                continue
+
             error_str = str(e).lower()
             error_name = type(e).__name__.lower()
             
             if "400" in error_str or "invalid argument" in error_str:
                 raise e
                 
-            if attempt < max_retries - 1:
+            # Failures that really spent the retry budget: an auth recovery was
+            # refunded, so it never shifts the backoff or the attempt counter.
+            failures = attempt - auth_recoveries
+            if failures < max_retries - 1:
                 if "503" in error_str or "504" in error_str or "429" in error_str or "unavailable" in error_str or "timeout" in error_str or "timeout" in error_name or "deadline_exceeded" in error_str or "cancelled" in error_str:
                     if HUMAN_PAUSE_REQUESTED:
                         delay = 1
                         global_logger.info("⚠️ API connection interrupted by OS signal. Safely retrying to capture state...", extra={"color": typer.colors.YELLOW})
                     else:
-                        delay = base_delay * (2 ** attempt)
-                        global_logger.warning(f"⚠️ API Interruption ({type(e).__name__}): {e}. Retrying in {delay}s (Attempt {attempt+1}/{max_retries})...")
+                        delay = base_delay * (2 ** failures)
+                        global_logger.warning(f"⚠️ API Interruption ({type(e).__name__}): {e}. Retrying in {delay}s (Attempt {failures+1}/{max_retries})...")
                 else:
-                    delay = base_delay * (2 ** attempt)
-                    global_logger.warning(f"⚠️ Unexpected API Error: {error_name} - {e}. Retrying in {delay}s (Attempt {attempt+1}/{max_retries})...")
+                    delay = base_delay * (2 ** failures)
+                    global_logger.warning(f"⚠️ Unexpected API Error: {error_name} - {e}. Retrying in {delay}s (Attempt {failures+1}/{max_retries})...")
                 
                 time.sleep(delay)
                 continue
@@ -615,6 +637,11 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
     # ...and so does the wire API: Copilot serves some models over Responses only
     # (T7). Every provider here answers "completions" unless it says otherwise.
     wire_api = getattr(auth, "wire_api", COMPLETIONS_WIRE_API)
+    # One line naming what this run actually talks to: the provider, the host its
+    # credential resolved to (never the config's), the model, the wire API.
+    global_logger.info(f"🔌 Provider: {provider} | Base URL: {auth.base_url} | "
+                       f"Model: {target_model} | Wire API: {wire_api}",
+                       extra={"color": typer.colors.CYAN})
     tools_schema = _get_tools_schema(workflow)
     
     sessions_root = config_data.get("sessions_root")
@@ -659,15 +686,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             if user_msg:
                 messages.append({"role": "user", "content": user_msg})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api, agent_cfg=agent_config, config=config_data)
             else:
                 messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api, agent_cfg=agent_config, config=config_data)
         else:
             messages.append({"role": "user", "content": prompt})
             messages = _prune_messages(messages, prune_token_limit)
-            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
+            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api, agent_cfg=agent_config, config=config_data)
         
         iteration_count = 0
         tool_execution_count = 0
@@ -785,7 +812,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 #     global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
                 #     break
 
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api, agent_cfg=agent_config, config=config_data)
             else:
                 agent_content = ""
                 if response and response.choices and getattr(response.choices[0].message, "content", None):
@@ -812,7 +839,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         else:
                             messages.append({"role": "user", "content": warning_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api, agent_cfg=agent_config, config=config_data)
                         continue
 
                 if HUMAN_PAUSE_REQUESTED:
@@ -820,7 +847,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     if user_msg:
                         messages.append({"role": "user", "content": user_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl, wire_api=wire_api, agent_cfg=agent_config, config=config_data)
                         continue
                 break
                 

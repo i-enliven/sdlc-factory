@@ -4,7 +4,12 @@ import typer
 from openai import OpenAI
 
 from sdlc_factory.utils import get_config, abort, global_logger
-from sdlc_factory.providers import get_provider, make_client, request_headers
+from sdlc_factory.providers import (
+    get_provider,
+    make_client,
+    request_headers,
+    try_recover_auth,
+)
 from sdlc_factory.providers import responses as responses_api
 from sdlc_factory.providers.base import (
     COMPLETIONS_WIRE_API,
@@ -13,25 +18,40 @@ from sdlc_factory.providers.base import (
 from sdlc_factory.tools import sdlc_store_memory
 
 
-def _create(client, provider_impl, wire_api, model, messages, tools, temperature):
+def _create(client, provider_impl, wire_api, model, messages, tools, temperature,
+            agent_cfg=None, config=None):
     """One send, routed by the wire API the provider resolved for this model.
 
     Copilot serves some models over the Responses API only (PLAN.md §2.3, T7);
     ``responses.send`` returns the completions path's reply shape, so the tool
     loop below does not care which wire API answered. Everything else keeps
     going through ``chat.completions`` exactly as before.
+
+    A 401 from a provider that owns a renewable credential is repaired here, once:
+    refresh, re-point the client, send again (T8). A second 401, and every other
+    error, propagates to the caller's handler exactly as it used to.
     """
     headers = request_headers(provider_impl, messages)
-    if wire_api == RESPONSES_WIRE_API:
-        return responses_api.send(client, model, messages, tools,
-                                  temperature=temperature, extra_headers=headers)
-    return client.chat.completions.create(
-        model=model,
-        messages=messages,
-        tools=tools,
-        temperature=temperature,
-        extra_headers=headers
-    )
+    recovered = False
+    while True:
+        try:
+            if wire_api == RESPONSES_WIRE_API:
+                return responses_api.send(client, model, messages, tools,
+                                          temperature=temperature, extra_headers=headers)
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                temperature=temperature,
+                extra_headers=headers
+            )
+        except Exception as error:
+            if not try_recover_auth(client, provider_impl, error, recovered,
+                                    agent_cfg, config):
+                raise
+            # The credential was refreshed and this client re-pointed at it: send
+            # the same request again, right now.
+            recovered = True
 
 
 def run_chat_session(session_id: str):
@@ -71,6 +91,11 @@ def run_chat_session(session_id: str):
     provider_impl = get_provider(provider)
     # ...and so does the wire API this client has to be sent through (T7).
     wire_api = getattr(auth, "wire_api", COMPLETIONS_WIRE_API)
+    # One line naming what this chat actually talks to: the provider, the host its
+    # credential resolved to (never the config's), the model, the wire API.
+    global_logger.info(f"🔌 Provider: {provider} | Base URL: {auth.base_url} | "
+                       f"Model: {target_model} | Wire API: {wire_api}",
+                       extra={"color": typer.colors.CYAN})
 
     tools = [
         {
@@ -112,7 +137,8 @@ def run_chat_session(session_id: str):
             messages.append({"role": "user", "content": user_input})
             
             response = _create(client, provider_impl, wire_api, target_model,
-                               messages, tools, target_temp)
+                               messages, tools, target_temp,
+                               agent_cfg=agent_config, config=config_data)
             
             while response.choices[0].message.tool_calls:
                 assistant_msg = response.choices[0].message
@@ -142,7 +168,8 @@ def run_chat_session(session_id: str):
                 
                 messages.extend(tool_results)
                 response = _create(client, provider_impl, wire_api, target_model,
-                                   messages, tools, target_temp)
+                                   messages, tools, target_temp,
+                                   agent_cfg=agent_config, config=config_data)
             
             assistant_msg = response.choices[0].message
             messages.append(assistant_msg)

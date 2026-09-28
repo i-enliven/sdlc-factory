@@ -40,12 +40,6 @@ import typer
 
 from ..utils import global_logger
 
-# Copilot rejects an explicit ``temperature`` on gpt-5-class reasoning models
-# ("... does not support this parameter"). The Responses API itself does support
-# temperature, so the omission is scoped to the ids known to reject it rather
-# than to the wire API as a whole.
-NO_TEMPERATURE_PREFIXES = ("gpt-5",)
-
 SYSTEM_ROLE = "system"
 USER_ROLE = "user"
 ASSISTANT_ROLE = "assistant"
@@ -266,12 +260,6 @@ def to_responses_tools(tools: Any) -> list[dict]:
     return converted
 
 
-def needs_no_temperature(model: Any) -> bool:
-    """True when ``model`` rejects an explicit ``temperature``."""
-    lowered = (model or "").lower() if isinstance(model, str) else ""
-    return lowered.startswith(NO_TEMPERATURE_PREFIXES)
-
-
 def request_payload(model: str, messages: list, tools: Any = None, temperature: Any = None,
                     max_tokens: Any = None, extra_headers: Any = None,
                     stream: bool = True) -> dict:
@@ -281,6 +269,23 @@ def request_payload(model: str, messages: list, tools: Any = None, temperature: 
     replays reasoning items by id alone, and a server that does not keep the
     item cannot resolve it. (pi, which replays the whole item including its
     encrypted content, is the ``store: false`` variant of the same trick.)
+
+    ``temperature`` is accepted and never sent. Verified live against Copilot:
+    *every* model it serves over the Responses API answers an explicit
+    ``temperature`` with ``400 "Unsupported parameter: 'temperature' is not
+    supported with this model."`` — ``gpt-5-mini``, ``gpt-5.6-luna``,
+    ``gpt-6-luna`` and ``mai-code-1.1-flash`` all do it, and the reference
+    implementation (pi) never sends temperature through Copilot at all.
+
+    The rule is scoped to the wire API, not to model ids, on purpose: the first
+    version gated on a ``gpt-5`` prefix, ``gpt-6-luna`` slipped through, and the
+    400 killed a live dreamer run. The Responses API itself does support
+    temperature, but Copilot is the only provider this codebase routes here
+    (PLAN.md §2.3), and every model it serves over this API refuses the
+    parameter. Should a future provider here genuinely want it, that belongs on
+    this signature as a compat flag — not as a name pattern to keep chasing.
+    The argument stays either way so both wire APIs keep one shared caller
+    signature; the completions path still passes it through.
     """
     kwargs: dict[str, Any] = {"model": model, "input": to_responses_input(messages),
                               "stream": bool(stream)}
@@ -292,8 +297,9 @@ def request_payload(model: str, messages: list, tools: Any = None, temperature: 
         kwargs["tools"] = converted_tools
     if max_tokens:
         kwargs["max_output_tokens"] = int(max_tokens)
-    if temperature is not None and not needs_no_temperature(model):
-        kwargs["temperature"] = temperature
+    # ``temperature`` is dropped here on purpose, for every model on this path;
+    # the docstring above carries the verified reason. Nothing is sent in its
+    # place: the model's own default sampling applies.
     kwargs["extra_headers"] = extra_headers
     return kwargs
 
@@ -572,6 +578,10 @@ def send(client, model: str, messages: list, tools: Any = None, temperature: Any
     Streaming is ``stream and not no_stream`` — ``_send_with_retry`` speaks
     ``no_stream``, the SDK speaks ``stream``; both spellings mean the same here.
     A non-streamed reply prints nothing, like the completions path.
+
+    ``temperature`` is taken for signature parity with the completions path and
+    then dropped by :func:`request_payload` — no model served over this API
+    accepts it.
     """
     streaming = bool(stream) and not no_stream
     payload = request_payload(model, messages, tools, temperature, max_tokens,

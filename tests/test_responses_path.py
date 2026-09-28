@@ -288,20 +288,53 @@ def test_send_puts_system_in_instructions_and_maps_max_output_tokens():
     assert "tools" not in call
 
 
+# Every temperature assertion below passes a *truthy* temperature (0.7, not 0.0):
+# with 0.0 an omission could come from falsiness alone and prove nothing.
+
+PASSED_TEMPERATURE = 0.7
+
+
 def test_send_omits_temperature_for_gpt5_models():
     client = FakeClient([text_delta("ok")])
     responses_api.send(client, "gpt-5.1-codex", [{"role": "user", "content": "hi"}],
-                       [], 0.0, 100, None)
+                       [], PASSED_TEMPERATURE, 100, None)
 
     assert "temperature" not in client.responses_calls[0]
 
 
-@pytest.mark.parametrize("model", ["grok-4", "oswe-1.5", "mai-1", "gpt-4.1"])
-def test_send_passes_temperature_for_other_models(model):
-    client = FakeClient([text_delta("ok")])
-    responses_api.send(client, model, [{"role": "user", "content": "hi"}], [], 0.0, 100, None)
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "gpt-6-luna", "gpt-4.1"])
+def test_send_omits_temperature_for_other_gpt_models(model):
+    """The gate is the wire API, not the ``gpt-5`` name.
 
-    assert client.responses_calls[0]["temperature"] == 0.0
+    ``gpt-6-luna`` is the live regression: the ``gpt-5`` prefix gate let it
+    through and Copilot answered
+    ``400 "Unsupported parameter: 'temperature' is not supported with this
+    model."``, killing a dreamer run mid-flight.
+    """
+    client = FakeClient([text_delta("ok")])
+
+    responses_api.send(client, model, [{"role": "user", "content": "hi"}],
+                       [], PASSED_TEMPERATURE, 100, None)
+
+    assert "temperature" not in client.responses_calls[0]
+
+
+@pytest.mark.parametrize("model", ["grok-4", "oswe-1.5", "mai-1",
+                                   "mai-code-1.1-flash", "claude-sonnet-4.5"])
+def test_send_omits_temperature_for_non_gpt_models_on_this_path(model):
+    """A non-gpt model routed here omits temperature too.
+
+    Copilot serves ``grok-*``/``oswe*``/``mai-*`` over the Responses API as well
+    (PLAN.md §2.3) and they reject an explicit ``temperature`` exactly like the
+    gpt models do — verified live for ``mai-code-1.1-flash``. No model id on
+    this path may receive the parameter.
+    """
+    client = FakeClient([text_delta("ok")])
+
+    responses_api.send(client, model, [{"role": "user", "content": "hi"}],
+                       [], PASSED_TEMPERATURE, 100, None)
+
+    assert "temperature" not in client.responses_calls[0]
 
 
 def test_send_converts_no_stream_to_a_non_streaming_request():
@@ -681,6 +714,30 @@ def test_send_with_retry_defaults_to_the_completions_path(quiet_agent):
     assert calls[0]["max_tokens"] == 100
     assert calls[0]["stream"] is True
     assert calls[0]["extra_headers"] is None
+
+
+def test_send_with_retry_still_passes_temperature_on_the_completions_path(quiet_agent):
+    """Scope guard: the temperature omission belongs to the Responses path only.
+
+    Completions-served models and non-Copilot providers keep receiving the
+    configured temperature; a fix that dropped it here would silently change
+    every agent's sampling.
+    """
+    chunk = SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+        content="legacy reply", tool_calls=None, reasoning_content=None,
+        reasoning=None))], model_dump=lambda exclude_unset=True: {})
+    calls = []
+    client = SimpleNamespace(chat=SimpleNamespace(
+        completions=SimpleNamespace(create=lambda **kwargs: (calls.append(kwargs), [chunk])[1])),
+        responses=SimpleNamespace(create=lambda **kwargs: pytest.fail(
+            "responses.create must not be called by default")))
+
+    agent_module._send_with_retry(
+        client, [{"role": "user", "content": "hi"}], [], "local-model",
+        PASSED_TEMPERATURE, 100, "session-1", quiet_agent / "session-1.session",
+        provider=None)
+
+    assert calls[0]["temperature"] == PASSED_TEMPERATURE
 
 
 def test_execute_agent_passes_the_resolved_wire_api(mocker, tmp_path, quiet_agent):

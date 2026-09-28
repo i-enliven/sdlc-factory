@@ -4,7 +4,7 @@ import typer
 from openai import OpenAI
 
 from sdlc_factory.utils import get_config, abort, global_logger
-from sdlc_factory.providers import make_client
+from sdlc_factory.providers import get_provider, make_client, request_headers
 from sdlc_factory.tools import sdlc_store_memory
 
 def run_chat_session(session_id: str):
@@ -39,6 +39,9 @@ def run_chat_session(session_id: str):
     provider = agent_config.get("provider", "vllm")
     target_temp = float(agent_config.get("temperature", 0.0))
     client, _auth = make_client(provider, agent_config, config_data, client_factory=OpenAI)
+    # Travels with the client: Copilot adds per-request headers derived from the
+    # messages we are about to send (T6). Other providers contribute nothing.
+    provider_impl = get_provider(provider)
 
     tools = [
         {
@@ -83,7 +86,8 @@ def run_chat_session(session_id: str):
                 model=target_model,
                 messages=messages,
                 tools=tools,
-                temperature=target_temp
+                temperature=target_temp,
+                extra_headers=request_headers(provider_impl, messages)
             )
             
             while response.choices[0].message.tool_calls:
@@ -117,7 +121,8 @@ def run_chat_session(session_id: str):
                     model=target_model,
                     messages=messages,
                     tools=tools,
-                    temperature=target_temp
+                    temperature=target_temp,
+                    extra_headers=request_headers(provider_impl, messages)
                 )
             
             assistant_msg = response.choices[0].message

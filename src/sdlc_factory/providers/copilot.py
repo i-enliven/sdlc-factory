@@ -1,4 +1,4 @@
-"""GitHub Copilot provider — AUTH FLOW ONLY (T4).
+"""GitHub Copilot provider — auth flow (T4) + runtime resolution (T6).
 
 Port of pi's verified TypeScript implementation
 (``packages/ai/src/auth/oauth/github-copilot.ts`` + ``.../device-code.ts`` +
@@ -6,10 +6,13 @@ Port of pi's verified TypeScript implementation
 
 Implemented here: the OAuth device-code flow, the Copilot proxy-token exchange
 (``copilot_internal/v2/token``), the model catalog fetch with policy auto-enable,
-base-URL derivation from the token itself, ``auth.json`` persistence, and the
-read-only helpers the CLI needs (``copilot_status`` / ``logout``).
+base-URL derivation from the token itself, ``auth.json`` persistence, the
+read-only helpers the CLI needs (``copilot_status`` / ``logout``), the runtime
+``resolve()`` (expiry refresh, wire API, static editor headers) and the dynamic
+per-request headers (``prepare_headers``).
 
-Not implemented here: runtime ``resolve()`` (T6).
+Not implemented here: the Responses wire API itself (T7) and the 401 mid-run
+force-refresh (T8 — :meth:`CopilotProvider.refresh` is the reusable entry point).
 
 All network traffic goes through one injectable seam (``http=...``); every flow
 function takes it as its last argument, so tests drive the whole login with fake
@@ -24,8 +27,9 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, NamedTuple, Optional
 
+from ..utils import abort, global_logger
 from . import store
-from .base import Provider, ResolvedAuth
+from .base import Provider, ResolvedAuth, resolve_timeout
 
 PROVIDER_ID = "github-copilot"
 
@@ -71,6 +75,26 @@ RESPONSES_API_PREFIXES = ("gpt-", "grok-", "oswe", "mai-")
 UNSUPPORTED_API_PREFIXES = ("claude",)
 
 ENTERPRISE_PROMPT = "GitHub Enterprise URL/domain (blank for github.com)"
+
+# Runtime abort messages. One place, so the CLI and the agent fail the same way.
+NOT_CONFIGURED_MESSAGE = "Copilot not configured — run 'sdlc-factory copilot-login'"
+SESSION_EXPIRED_MESSAGE = "Copilot session expired — run 'sdlc-factory copilot-login'"
+
+# Dynamic per-request headers (PLAN.md §2.3). Copilot bills/attributes requests by
+# initiator and rejects vision calls that do not declare an image payload.
+INITIATOR_HEADER = "X-Initiator"
+INITIATOR_USER = "user"
+INITIATOR_AGENT = "agent"
+OPENAI_INTENT_HEADER = "Openai-Intent"
+OPENAI_INTENT_VALUE = "conversation-edits"
+VISION_REQUEST_HEADER = "Copilot-Vision-Request"
+VISION_REQUEST_VALUE = "true"
+IMAGE_CONTENT_TYPE = "image"
+# "toolResult" is the role name pi-style transcripts use for tool output; this
+# codebase emits OpenAI-style "tool" messages. Both carry images.
+VISION_CONTENT_ROLES = ("user", "toolResult", "tool")
+
+UNSUPPORTED_WIRE_API = "unsupported"
 
 # Status rendering. Local time on purpose: the expiry is a wall-clock fact the
 # user compares against their own clock, not a duration to reason about.
@@ -265,10 +289,118 @@ def get_wire_api(model_id: str) -> str:
     """Which wire API Copilot serves ``model_id`` on: see the prefix constants."""
     lowered = (model_id or "").lower()
     if lowered.startswith(UNSUPPORTED_API_PREFIXES):
-        return "unsupported"
+        return UNSUPPORTED_WIRE_API
     if lowered.startswith(RESPONSES_API_PREFIXES):
         return "responses"
     return "completions"
+
+
+# --- runtime: credential state, catalog, dynamic headers ---
+
+def credential_is_expired(credential: dict, now_ms: Optional[float] = None) -> bool:
+    """True when the stored expiry has passed — or when it cannot be trusted.
+
+    ``expires`` is epoch millis and already carries the 5-minute early-refresh
+    buffer (see :func:`fetch_copilot_token`). A missing or non-numeric expiry is
+    "expired": we would rather pay for a refresh than send a request that 401s.
+    """
+    expires = credential.get("expires")
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)):
+        return True
+    current = now_ms if now_ms is not None else time.time() * 1000
+    return expires <= current
+
+
+def stored_enterprise_domain(credential: dict) -> Optional[str]:
+    """The stored enterprise domain, or ``None`` for github.com."""
+    raw = credential.get("enterprise_url")
+    return raw if isinstance(raw, str) and raw else None
+
+
+def catalog_model_ids(credential: dict) -> list:
+    """Every model id the stored credential knows about, sorted."""
+    ids = set()
+    models = credential.get("models")
+    if isinstance(models, dict):
+        ids.update(model_id for model_id in models if isinstance(model_id, str))
+    available = credential.get("available_model_ids")
+    if isinstance(available, list):
+        ids.update(model_id for model_id in available if isinstance(model_id, str))
+    return sorted(ids)
+
+
+def wire_api_for(credential: dict, model_id: Any) -> str:
+    """Wire API for ``model_id`` from the stored catalog; aborts when unusable.
+
+    An unknown model is a config typo or a stale catalog and must fail here, with
+    the ids that *are* available, rather than at request time. A model whose wire
+    API Copilot only serves as Anthropic-Messages is out of scope (PLAN.md §5):
+    naming the limitation is more useful than a stream that never parses.
+    """
+    if not isinstance(model_id, str) or not model_id:
+        abort("Copilot agent has no model configured — set models.<agent>.model")
+    models = credential.get("models")
+    entry = models.get(model_id) if isinstance(models, dict) else None
+    api = entry.get("api") if isinstance(entry, dict) else None
+    if not isinstance(api, str) or not api:
+        available = catalog_model_ids(credential)
+        if model_id not in available:
+            listing = ", ".join(available) or "(none — run 'sdlc-factory copilot-login')"
+            abort(f"Copilot model '{model_id}' is not in the catalog. "
+                  f"Available models: {listing}")
+        # Pre-T4 credentials stored no per-model api; infer it from the id prefix,
+        # exactly like `api_summary` does for `copilot-status`.
+        api = get_wire_api(model_id)
+    if api == UNSUPPORTED_WIRE_API:
+        abort(f"Copilot serves '{model_id}' over the anthropic-messages wire API, which "
+              f"this codebase does not speak (PLAN.md §5). Choose a model served over "
+              f"chat/completions or Responses.")
+    return api
+
+
+def _message_field(message: Any, name: str) -> Any:
+    """Read ``name`` from a message dict *or* an SDK message object.
+
+    ``chat.py``/``agent.py`` append the SDK's own message objects to the history,
+    so the pre-send hook cannot assume plain dicts.
+    """
+    if isinstance(message, dict):
+        return message.get(name)
+    return getattr(message, name, None)
+
+
+def _has_image_part(message: Any) -> bool:
+    content = _message_field(message, "content")
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(part, dict) and part.get("type") == IMAGE_CONTENT_TYPE
+               for part in content)
+
+
+def prepare_headers(messages: Any) -> dict:
+    """Per-request Copilot headers, derived from the outgoing messages.
+
+    Computed at send time, not at client construction: the history grows between
+    iterations, so the initiator and the vision flag are different facts on every
+    attempt. Malformed entries (non-dict messages, string content, missing roles)
+    are ignored rather than raising — a header must never break a send.
+    """
+    history = messages if isinstance(messages, list) else []
+    last_role = None
+    for message in reversed(history):
+        role = _message_field(message, "role")
+        if isinstance(role, str) and role:
+            last_role = role
+            break
+    headers = {
+        INITIATOR_HEADER: INITIATOR_USER if last_role in (None, INITIATOR_USER)
+        else INITIATOR_AGENT,
+        OPENAI_INTENT_HEADER: OPENAI_INTENT_VALUE,
+    }
+    if any(_message_field(message, "role") in VISION_CONTENT_ROLES
+           and _has_image_part(message) for message in history):
+        headers[VISION_REQUEST_HEADER] = VISION_REQUEST_VALUE
+    return headers
 
 
 # --- step 1: device code ---
@@ -530,6 +662,42 @@ def enable_models(copilot_token: str, model_ids, base_url: Optional[str] = None,
 
 # --- persistence + orchestration ---
 
+def refresh_credential(http: Any = None) -> dict:
+    """Replay the stored GitHub token for a fresh proxy token + catalog.
+
+    Rewrites the ``github-copilot`` entry in auth.json (other providers' entries
+    are preserved by :func:`save_credential`). The catalog is re-fetched because
+    model availability is account state, not token state — but previously enabled
+    ids are *kept*: a refresh rotates a credential, it is not a re-authorization,
+    and dropping a model here would break an agent that is mid-session.
+    """
+    stored = load_credential() or {}
+    gh_token = stored.get("refresh")
+    enterprise = stored_enterprise_domain(stored)
+    if not isinstance(gh_token, str) or not gh_token:
+        abort(SESSION_EXPIRED_MESSAGE)
+    try:
+        fresh = fetch_copilot_token(gh_token, enterprise, http)
+        base_url = get_base_url(fresh["access"], enterprise)
+        catalog = fetch_model_catalog(fresh["access"], base_url, http)
+    except (CopilotAuthError, OSError, ValueError) as error:
+        global_logger.warning(f"Copilot token refresh failed: {error}")
+        abort(SESSION_EXPIRED_MESSAGE)
+
+    stored_models = stored.get("models")
+    models = dict(stored_models) if isinstance(stored_models, dict) else {}
+    models.update(catalog["models"])
+    credential = {
+        **stored,
+        **fresh,
+        "available_model_ids": sorted(set(catalog_model_ids(stored))
+                                      | set(catalog["available_model_ids"])),
+        "models": models,
+    }
+    save_credential(credential)
+    return credential
+
+
 def save_credential(credential: dict) -> None:
     """Merge our entry into auth.json; other providers' entries are preserved."""
     data = store.read_auth()
@@ -603,15 +771,14 @@ def copilot_status() -> dict:
     model_ids: list = []
     if isinstance(raw_ids, list):
         model_ids = sorted(model_id for model_id in raw_ids if isinstance(model_id, str))
-    raw_enterprise = credential.get("enterprise_url")
-    enterprise_url = raw_enterprise if isinstance(raw_enterprise, str) and raw_enterprise else None
+    enterprise_url = stored_enterprise_domain(credential)
     return {
         "logged_in": True,
         "base_url": get_base_url(credential.get("access"), enterprise_url),
         "enterprise_url": enterprise_url,
         "expires_at": int(expires_ms) if usable_expiry else None,
         "expires_human": format_expiry(expires_ms),
-        "expired": not usable_expiry or expires_ms <= time.time() * 1000,
+        "expired": credential_is_expired(credential),
         "model_count": len(model_ids),
         "model_ids": model_ids,
         "api_summary": api_summary(model_ids, credential.get("models")),
@@ -659,15 +826,45 @@ def login(prompt: Optional[Callable[[str], str]] = None, http: Any = None,
 
 
 class CopilotProvider(Provider):
-    """GitHub Copilot. Auth flow only — ``resolve`` is T6."""
+    """GitHub Copilot: short-lived bearer, token-derived base URL, editor headers."""
 
     id = PROVIDER_ID
 
-    def resolve(self, agent_cfg: dict, config: dict) -> ResolvedAuth:
-        raise NotImplementedError(
-            "GitHub Copilot runtime resolution is implemented in T6 (PLAN.md §2.3); "
-            "run the login flow (T5: 'sdlc-factory copilot-login') for now."
+    def resolve(self, agent_cfg: dict, config: dict, http: Any = None) -> ResolvedAuth:
+        """Resolve the stored credential into a connection for one agent.
+
+        The base URL comes from the token's ``proxy-ep`` claim and from nowhere
+        else (pi regression #6768): a config/catalog URL that happens to work for
+        the first call sends retry and session traffic to the wrong host. The
+        static editor headers go on the client; the initiator/vision headers are
+        per request, see :meth:`prepare_headers`.
+
+        ``http`` is the same injectable seam the auth flow uses, so tests can
+        drive a refresh without a socket.
+        """
+        credential = load_credential()
+        if not credential:
+            abort(NOT_CONFIGURED_MESSAGE)
+        if credential_is_expired(credential):
+            credential = self.refresh(http=http)
+        access = credential.get("access")
+        if not isinstance(access, str) or not access:
+            abort(NOT_CONFIGURED_MESSAGE)
+        return ResolvedAuth(
+            base_url=get_base_url(access, stored_enterprise_domain(credential)),
+            api_key=access,
+            headers=dict(EDITOR_HEADERS),
+            timeout=resolve_timeout(config),
+            wire_api=wire_api_for(credential, agent_cfg.get("model")),
         )
+
+    @classmethod
+    def refresh(cls, http: Any = None) -> dict:
+        """Force a token + catalog refresh and persist it. Also used on 401 (T8)."""
+        return refresh_credential(http=http)
+
+    def prepare_headers(self, messages: list) -> dict:
+        return prepare_headers(messages)
 
     def login(self, prompt=None, http=None, sleep=None, enterprise=None, notify=None) -> dict:
         return login(prompt=prompt, http=http, sleep=sleep, enterprise=enterprise, notify=notify)

@@ -393,14 +393,16 @@ def test_empty_or_foreign_providers_section_changes_nothing(config, env_key):
 
 # --- registry / make_client with the providers section ---
 
-def test_github_copilot_is_registered_after_t4():
-    """T4 registered the auth flow; runtime resolve() is still T6."""
+def test_github_copilot_is_registered_and_resolves(tmp_path, monkeypatch):
+    """T4 registered the auth flow; T6 implemented ``resolve`` on top of it."""
+    from sdlc_factory.providers import store
     from sdlc_factory.providers.copilot import CopilotProvider
 
+    monkeypatch.setattr(store, "AUTH_FILE", tmp_path / "auth.json")
     assert PROVIDERS["github-copilot"].id == "github-copilot"
     assert isinstance(get_provider("github-copilot"), CopilotProvider)
-    with pytest.raises(NotImplementedError):
-        get_provider("github-copilot").resolve({}, {})
+    with pytest.raises(SystemExit):  # not logged in -> abort, never a silent fallback
+        get_provider("github-copilot").resolve({"model": "gpt-4.1"}, {})
 
 def test_unknown_provider_lists_known_ids():
     with pytest.raises(ValueError) as exc:

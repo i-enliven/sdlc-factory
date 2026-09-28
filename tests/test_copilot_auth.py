@@ -796,11 +796,12 @@ def test_load_credential_ignores_non_dict_entry(auth_file):
 
 # --- provider class ---
 
-def test_copilot_provider_id_and_deferred_resolve():
+def test_copilot_provider_id_and_resolve_requires_login(auth_file):
+    """T6 replaced the stub: ``resolve`` now aborts when nothing is stored."""
     provider = CopilotProvider()
     assert provider.id == "github-copilot"
-    with pytest.raises(NotImplementedError, match="T6"):
-        provider.resolve({}, {})
+    with pytest.raises(SystemExit):
+        provider.resolve({"model": "gpt-4.1"}, {})
 
 def test_copilot_provider_login_delegates(auth_file):
     credential = CopilotProvider().login(http=login_http(), sleep=lambda s: None)

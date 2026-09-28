@@ -1,4 +1,5 @@
-"""Provider registry and the single client-construction entry point."""
+"""Provider registry, the single client-construction entry point, and the
+per-request header hook."""
 
 from typing import Callable, Optional
 
@@ -51,3 +52,18 @@ def make_client(
         timeout=auth.timeout,
     )
     return client, auth
+
+
+def request_headers(provider: Optional[Provider], messages: list) -> Optional[dict]:
+    """Per-request headers for one send, or ``None`` when the provider has none.
+
+    Callers pass the ``Provider`` object next to the client they built with
+    :func:`make_client`; the hook is re-evaluated for every request because the
+    message history changes between iterations (see ``CopilotProvider``). Most
+    providers have no dynamic headers, and the OpenAI SDK treats a ``None``
+    ``extra_headers`` as "nothing to add", so that is what we pass through.
+    """
+    prepare = getattr(provider, "prepare_headers", None)
+    if not callable(prepare):
+        return None
+    return prepare(messages) or None

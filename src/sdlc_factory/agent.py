@@ -14,7 +14,7 @@ import os
 from openinference.instrumentation import using_session
 
 from sdlc_factory.utils import get_config, abort, global_logger, format_size
-from sdlc_factory.providers import make_client
+from sdlc_factory.providers import get_provider, make_client, request_headers
 
 from sdlc_factory.tools import (
     sdlc_advance_state,
@@ -235,18 +235,21 @@ def _save_session(messages: list[dict], session_file: Path):
     except Exception as e:
         global_logger.warning(f"Failed to serialize session history: {e}")
 
-def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False):
+def _send_with_retry(client, messages, tools, target_model, target_temp, target_max_tokens: int, session_id: str, session_file: Path, max_retries=20, base_delay=5, no_stream=False, provider=None):
     time.sleep(0.5)
     for attempt in range(max_retries):
         try:
             with using_session(session_id):
                 stream_kwargs = {"stream": True, "stream_options": {"include_usage": True}} if not no_stream else {"stream": False}
+                # Recomputed per attempt: some providers (Copilot) gate on headers
+                # that describe *this* request, and the history is not static.
                 res = client.chat.completions.create(
                     model=target_model,
                     messages=messages,
                     tools=tools,
                     temperature=target_temp,
                     max_tokens=target_max_tokens,
+                    extra_headers=request_headers(provider, messages),
                     **stream_kwargs
                 )
                 
@@ -604,6 +607,9 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
         prune_token_limit = 4000
 
     client = _setup_client(config_data, agent_config, provider=provider)
+    # The provider object travels with the client: some providers add per-request
+    # headers that only the outgoing messages can tell us about (Copilot, T6).
+    provider_impl = get_provider(provider)
     tools_schema = _get_tools_schema(workflow)
     
     sessions_root = config_data.get("sessions_root")
@@ -648,15 +654,15 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
             if user_msg:
                 messages.append({"role": "user", "content": user_msg})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
             else:
                 messages.append({"role": "user", "content": "SYSTEM: Session resumed. Please continue."})
                 messages = _prune_messages(messages, prune_token_limit)
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
         else:
             messages.append({"role": "user", "content": prompt})
             messages = _prune_messages(messages, prune_token_limit)
-            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
+            response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
         
         iteration_count = 0
         tool_execution_count = 0
@@ -774,7 +780,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                 #     global_logger.info("🛑 State successfully advanced. Forcing agent yield to prevent hallucinatory continuation.", extra={"color": typer.colors.MAGENTA})
                 #     break
 
-                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
+                response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
             else:
                 agent_content = ""
                 if response and response.choices and getattr(response.choices[0].message, "content", None):
@@ -801,7 +807,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                         else:
                             messages.append({"role": "user", "content": warning_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
                         continue
 
                 if HUMAN_PAUSE_REQUESTED:
@@ -809,7 +815,7 @@ def execute_agent(agent_name: str, prompt: str, exclude_files: Optional[list[str
                     if user_msg:
                         messages.append({"role": "user", "content": user_msg})
                         messages = _prune_messages(messages, prune_token_limit)
-                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream)
+                        response = _send_with_retry(client, messages, tools_schema, target_model, target_temp, target_max_tokens, session_id, session_file, no_stream=no_stream, provider=provider_impl)
                         continue
                 break
                 
